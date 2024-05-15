@@ -4,18 +4,24 @@
 
 Designed for real world messy traffic data (volumes, travel times), `traffic_anomaly` uses medians to decompose time series into trend, daily, weekly, and residual components. Anomalies are then classified, and Median Absolute Deviation may be used for further robustness. Missing data are handled, and time periods without sufficient data can be thrown out. Check out `example.ipynb` in this repository for a demo.
 
-This package does not produce plots but here's one anyway:
 
-![Example](example_plot.png)
 
 # Installation
 
 Note: Ibis and DuckDB are dependencies and will be installed automatically.
 
 ```bash
-pip install traffic_anomaly
+pip install traffic-anomaly
 ```
+and then
+```python
+import traffic_anomaly
+decomposed = traffic_anomaly.decompose(df) # pandas or ibis DataFrame
+anomalies = traffic_anomaly.find_anomalies(decomposed)
+```
+This package does not produce plots but here's one anyway:
 
+![Example](example_plot.png)
 # Considerations
 
 The seasonal components are not allowed to change over time, therefore, it is important to limit the number of weeks included in the model, especially if there is yearly seasonality (and there is). The recommended use for application over a long date range is to run the model incrementally over a rolling window of about 6 weeks.

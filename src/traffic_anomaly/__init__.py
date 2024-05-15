@@ -4,4 +4,4 @@ from .sample_data import sample_data
 
 __all__ = ['decompose', 'find_anomaly']
 
-__version__ = '0.0.0'
+__version__ = '0.0.1'
