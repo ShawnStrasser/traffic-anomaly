@@ -1,26 +1,38 @@
-## Please see "Example.ipynb" in this repository for an example use case
-## Contributions welcome!
-# Median Time Series Decomposition
+# Traffic Anomaly
 
-A Python class to perform robust time series decomposition on multiple time series at once. It decomposes the time series into the trend, daily, weekly, and residual components using medians (rather than means). Gaps in the time series are allowed.
+`traffic_anomaly` is a production ready Python package for robust decomposition and anomaly detection on multiple time series at once. It uses Ibis to integrate with any SQL backend in a production pipeline, or run locally with the included DuckDB backend.
 
-Using medians ensures that severe outliers do not influence the trend and seasonal components. After decomposing a time series, additional analytics can be applied, like anomaly detection (see below) or change point detection (to be added soon).  
+Designed for real world messy traffic data (volumes, travel times), `traffic_anomaly` uses medians to decompose time series into trend, daily, weekly, and residual components. Anomalies are then classified, and Median Absolute Deviation may be used for further robustness. Missing data are handled, and time periods without sufficient data can be thrown out. Check out `example.ipynb` in this repository for a demo.
 
-### Some Drawbacks
-The rolling median calculation is slow, it still needs to be vectorized. 
+This package does not produce plots but here's one anyway:
 
-The seasonal components are not allowed to change over time, therefore, it is important to limit the number of weeks included in the model, especially if there is yearly seasonality to consider. The recommended use for application over a long date range is to run the algorithm incrementally over a rolling window of dates.
+![Example](example_plot.png)
 
-If outliers in the time series always skew high, then forecasts made by this model would be systemically low because in a right tailed distribution the median will be lower than the mean. Not really a drawback, just an FYI.
+# Installation
 
-### Future Plans/Support
-Holidays and a yearly component will be included, might happen during Q2 2023, or sooner with help. 
+Note: Ibis and DuckDB are dependencies and will be installed automatically.
 
-# Anomaly Detection
+```bash
+pip install traffic_anomaly
+```
 
-A Python class to identify anomalies in multiple time series at once. Time series should be decomposed first (as above), and then anomaly classification should be done on the residuals. 
+# Considerations
 
-Sometimes when you have a group of related time series, like vehicle travel times within the same city, they will all be impacted by certain factors outside the regular seasonal components. For example, a snow storm would cause travel times across the city to drop. When looking at individual road segments, this would result in anomalies showing up at all of them. To account for system/group-wide events like this, an optional grouping column can be included. The result that this has is that only time series timestamps that have statistically significant residual components AND SIGNIFICANTLY DEVIATE FROM THE REST OF THE GROUP will be classified as an anomaly.
+The seasonal components are not allowed to change over time, therefore, it is important to limit the number of weeks included in the model, especially if there is yearly seasonality (and there is). The recommended use for application over a long date range is to run the model incrementally over a rolling window of about 6 weeks.
 
-# Change Point Detection
-Code is still in progress, works but needs modifications before publishing
+Because traffic data anomalies usually skew higher, forecasts made by this model are systemically low because in a right tailed distribution the median will be lower than the mean. This is by design, as the model is meant primarily for anomaly detection and not forecasting.
+
+# Notes On Anomaly Detection
+
+`traffic_anomaly` can classify two separate types of anomalies:
+
+1. Entity-Level Anomalies are detected for individual entities based on their own historical patterns, without considering the group context.
+2. Group-Level Anomalies are detected for entities when compared to the behavior of other entities within the same group. Group-level anomalies are more rare because in order to be considered for classification as a group-level anomaly, a time period must also have been classified as an entity-level anomaly.
+
+Why is that needed? Well, say you're data is vehicle travel times within a city and there is a snow storm. Travel times across the city drop, and if you're looking at roadway segments in isolation, everything is an anomaly. That's nice, but what if you're only interested in things that are broken? That's where group-level anomalies come in. They are more rare, but they are more likely to be actionable. Probably not much you can do about that snow storm...
+
+# Future Plans/Support
+It would be nice to add support for Holidays and a yearly component... please help?
+
+### Change Point Detection
+I have working code from the `ruptures` package but it's not integrated here yet, and it's slower than molasses. I'll get to it eventually.
