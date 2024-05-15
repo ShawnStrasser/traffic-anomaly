@@ -15,7 +15,7 @@ classifiers = [
 
 dependencies = [
     "duckdb>=0.9.1,<0.10.2",
-    "ibis-framework=9.0.0",
+    "ibis-framework==9.0.0",
 ]
 
 [tools.setuptools]
