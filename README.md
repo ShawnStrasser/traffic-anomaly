@@ -14,12 +14,7 @@ Note: Ibis and DuckDB are dependencies and will be installed automatically. Exce
 pip install traffic-anomaly
 pip install ibis-framework[duckdb]==9.0.0
 ```
-and then
-```python
-import traffic_anomaly
-decomposed = traffic_anomaly.decompose(df) # pandas or ibis DataFrame
-anomalies = traffic_anomaly.find_anomalies(decomposed)
-```
+
 This package does not produce plots but here's one anyway showing restults on actual traffic counts.
 
 ![ExampleAnomaly](anomaly1.png)
