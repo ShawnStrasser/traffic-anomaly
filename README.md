@@ -2,16 +2,17 @@
 
 `traffic_anomaly` is a production ready Python package for robust decomposition and anomaly detection on multiple time series at once. It uses Ibis to integrate with any SQL backend in a production pipeline, or run locally with the included DuckDB backend.
 
-Designed for real world messy traffic data (volumes, travel times), `traffic_anomaly` uses medians to decompose time series into trend, daily, weekly, and residual components. Anomalies are then classified, and Median Absolute Deviation may be used for further robustness. Missing data are handled, and time periods without sufficient data can be thrown out. Check out `example.ipynb` in this repository for a demo.
+Designed for real world messy traffic data (volumes, travel times), `traffic_anomaly` uses medians to decompose time series into trend, daily, weekly, and residual components. Anomalies are then classified, and Median Absolute Deviation may be used for further robustness. Missing data are handled, and time periods without sufficient data can be thrown out. Try it out, sample data included! [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1abv0GaEiapu6FFiKEsFI6NFxtX8kgTXb?usp=sharing)
 
 
 
 # Installation
 
-Note: Ibis and DuckDB are dependencies and will be installed automatically.
+Note: Ibis and DuckDB are dependencies and will be installed automatically. Except I forgot to include ibis-framework[duckdb] so you'll need to install that too for now but the next version will install the dependency automatically.
 
 ```bash
 pip install traffic-anomaly
+pip install ibis-framework[duckdb]==9.0.0
 ```
 and then
 ```python
@@ -19,8 +20,11 @@ import traffic_anomaly
 decomposed = traffic_anomaly.decompose(df) # pandas or ibis DataFrame
 anomalies = traffic_anomaly.find_anomalies(decomposed)
 ```
-This package does not produce plots but here's one anyway:
+This package does not produce plots but here's one anyway showing restults on actual traffic counts.
 
+![ExampleAnomaly](anomaly1.png)
+
+Here's a plot showing the decomposition some travel time data into its component parts. The sum of compoenents minus residuals is the predicted/model data.
 ![Example](example_plot.png)
 # Considerations
 

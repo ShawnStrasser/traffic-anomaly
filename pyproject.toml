@@ -1,6 +1,6 @@
 [project]
 name = "traffic_anomaly"
-version = "0.0.1"
+version = "1.0.0"
 authors = [
   { name="Shawn Strasser", email="shawn.strasser@odot.oregon.gov" },
 ]
@@ -14,8 +14,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "duckdb>=0.9.1,<0.10.2",
-    "ibis-framework==9.0.0",
+    "duckdb>=0.9.1,<=0.10.2",
+    "ibis-framework[duckdb]==9.0.0",
 ]
 
 [tools.setuptools]
