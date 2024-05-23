@@ -1,25 +1,67 @@
 # Traffic Anomaly
 
-`traffic_anomaly` is a production ready Python package for robust decomposition and anomaly detection on multiple time series at once. It uses Ibis to integrate with any SQL backend in a production pipeline, or run locally with the included DuckDB backend.
+`traffic-anomaly` is a production ready Python package for robust decomposition and anomaly detection on multiple time series at once. It uses Ibis to integrate with any SQL backend in a production pipeline, or run locally with the included DuckDB backend.
 
-Designed for real world messy traffic data (volumes, travel times), `traffic_anomaly` uses medians to decompose time series into trend, daily, weekly, and residual components. Anomalies are then classified, and Median Absolute Deviation may be used for further robustness. Missing data are handled, and time periods without sufficient data can be thrown out. Try it out, sample data included! [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1abv0GaEiapu6FFiKEsFI6NFxtX8kgTXb?usp=sharing)
+Designed for real world messy traffic data (volumes, travel times), `traffic-anomaly` uses medians to decompose time series into trend, daily, weekly, and residual components. Anomalies are then classified, and Median Absolute Deviation may be used for further robustness. Missing data are handled, and time periods without sufficient data can be thrown out. Try it out, sample data included! [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1abv0GaEiapu6FFiKEsFI6NFxtX8kgTXb?usp=sharing)
 
 
 
-# Installation
-
-Note: Ibis and DuckDB are dependencies and will be installed automatically. Except I forgot to include ibis-framework[duckdb] so you'll need to install that too for now but the next version will install the dependency automatically.
+# Installation & Usage
 
 ```bash
 pip install traffic-anomaly
-pip install ibis-framework[duckdb]==9.0.0
 ```
+    
+```python
+import traffic_anomaly
+from traffic_anomaly import sample_data
 
-This package does not produce plots but here's one anyway showing restults on actual traffic counts.
+decomp = traffic_anomaly.median_decompose(
+    data=travel_times, # Pandas DataFrame or Ibis Table (for compatibility with any SQL backend)
+    datetime_column='timestamp',
+    value_column='travel_time',
+    entity_grouping_columns=['id', 'group'],
+    freq_minutes=60, # Frequency of the time series in minutes
+    rolling_window_days=7, # Rolling window size in days. Should be a multiple of 7 for traffic data
+    drop_days=7, # Should be at least 7 for traffic data
+    min_rolling_window_samples=56, # Minimum number of samples in the rolling window, set to 0 to disable.
+    min_time_of_day_samples=7, # Minimum number of samples for each time of day (like 2:00pm), set to 0 to disable
+    drop_extras=False, # lets keep seasonal/trend for visualization below
+    to_sql=False # Return SQL queries instead of Pandas DataFrames for running on SQL backends
+)
+decomp.head(3)
+```
+| id         | timestamp           | travel_time | group           | median    | season_day | season_week | resid      | prediction |
+|------------|---------------------|-------------|-----------------|-----------|------------|-------------|------------|------------|
+| 448838574  | 2022-09-29 06:00:00 | 24.8850     | SE SUNNYSIDE RD | 24.963749 | -4.209375  | 0.57875     | 3.5518772  | 21.333122  |
+| 448838574  | 2022-09-22 06:00:00 | 20.1600     | SE SUNNYSIDE RD | 24.842501 | -4.209375  | 0.57875     | -1.0518752 | 21.211876  |
+| 448838574  | 2022-09-15 06:00:00 | 22.2925     | SE SUNNYSIDE RD | 24.871250 | -4.209375  | 0.57875     | 1.0518752  | 21.240623  |
+
+```python
+# Apply anomaly detection
+anomaly = traffic_anomaly.find_anomaly(
+    decomposed_data=decomp, # Decomposed time series as a Pandas DataFrame or Ibis Table
+    datetime_column='timestamp',
+    value_column='travel_time',
+    entity_grouping_columns=['id'],
+    entity_threshold=3.5 # Threshold for entity-level anomaly detection (z-score or GEH statistic)
+)
+anomaly.head(3)
+```
+| id         | timestamp           | travel_time | group          | prediction | anomaly |
+|------------|----------------------|-------------|----------------|------------|---------|
+| 448838575  | 2022-09-09 06:00:00  | 19.3575     | SE SUNNYSIDE RD| 16.926249  | False   |
+| 448838575  | 2022-09-09 07:00:00  | 22.5200     | SE SUNNYSIDE RD| 20.826252  | False   |
+| 448838575  | 2022-09-09 08:00:00  | 23.0350     | SE SUNNYSIDE RD| 22.712502  | False   |
+
+
+<br>
+
+The image below is showing an example application on actual traffic counts. Note that this package does not produce plots.
 
 ![ExampleAnomaly](anomaly1.png)
 
-Here's a plot showing the decomposition some travel time data into its component parts. The sum of compoenents minus residuals is the predicted/model data.
+Here's a plot showing what it looks like to decompose a time series. The sum of compoenents is equal to the original data. After extracting the trend and seasonal components, what is left are residuals that are more stationary so they're easier to work with.
 ![Example](example_plot.png)
 # Considerations
 
