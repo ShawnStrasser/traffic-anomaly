@@ -133,5 +133,7 @@ def find_anomaly(
 
     if return_sql:
         return ibis.to_sql(result)
+    elif isinstance(decomposed_data, ibis.Expr):
+        return result  # Return Ibis expression directly if input was Ibis
     else:
-        return result.execute()
+        return result.execute()  # Convert to pandas only for pandas inputs

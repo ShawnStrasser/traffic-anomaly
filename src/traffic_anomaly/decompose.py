@@ -120,6 +120,8 @@ def median_decompose(data,
 
     if to_sql:
         return ibis.to_sql(result)
+    elif isinstance(data, ibis.Expr):
+        return result  # Return Ibis expression directly if input was Ibis
     else:
-        return result.execute()
+        return result.execute()  # Convert to pandas only for pandas inputs
     
