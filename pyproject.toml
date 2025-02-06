@@ -1,6 +1,6 @@
 [project]
 name = "traffic_anomaly"
-version = "1.0.2"
+version = "1.0.3"
 authors = [
   { name="Shawn Strasser", email="shawn.strasser@odot.oregon.gov" },
 ]
@@ -14,7 +14,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "ibis-framework>=9.0.0,<10.0.0"
+    "ibis-framework[pandas]>=9.0.0,<10.0.0"
 ]
 
 [tools.setuptools]
