@@ -14,8 +14,9 @@ classifiers = [
 ]
 
 dependencies = [
-    "ibis-framework[pandas]>=9.0.0,<10.0.0"
+    "ibis-framework[pandas]>=9.0.0,<9.6.0"
 ]
+
 
 [tools.setuptools]
 include_package_data = true
