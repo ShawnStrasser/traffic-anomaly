@@ -13,3 +13,4 @@ src/traffic_anomaly.egg-info/requires.txt
 src/traffic_anomaly.egg-info/top_level.txt
 src/traffic_anomaly/data/sample_counts.parquet
 src/traffic_anomaly/data/sample_travel_times.parquet
+tests/test_traffic_anomaly.py
