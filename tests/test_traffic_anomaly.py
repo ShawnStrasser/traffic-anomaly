@@ -285,15 +285,10 @@ class TestTrafficAnomaly:
         import duckdb
         import ibis
         
-        # Set up DuckDB backend for consistent SQL execution
-        conn = duckdb.connect()
-        conn.register('travel_times', self.travel_times)
+        # Use the same approach as the package code - ibis.memtable()
+        travel_times_table = ibis.memtable(self.travel_times)
         
-        # Use Ibis with DuckDB backend 
-        ibis_conn = ibis.duckdb.connect()
-        travel_times_table = ibis_conn.read_in_memory(self.travel_times, table_name='travel_times')
-        
-        # Get regular result using DuckDB backend
+        # Get regular result using Ibis table (same as package approach)
         regular_result = traffic_anomaly.median_decompose(
             data=travel_times_table,
             datetime_column='timestamp',
@@ -306,7 +301,7 @@ class TestTrafficAnomaly:
             to_sql=False
         ).execute()
         
-        # Get SQL query
+        # Get SQL query using the same Ibis table
         sql_query = traffic_anomaly.median_decompose(
             data=travel_times_table,
             datetime_column='timestamp',
@@ -319,11 +314,18 @@ class TestTrafficAnomaly:
             to_sql=True
         )
         
-        # Execute SQL directly with the same connection
-        sql_result = ibis_conn.sql(sql_query).execute()
+        # Execute SQL with DuckDB using the original pandas data
+        conn = duckdb.connect()
+        conn.register('travel_times', self.travel_times)
         
+        # Replace the memtable reference in SQL with our registered table
+        # This is a bit hacky but works around the temporary table name issue
+        import re
+        # Find the memtable reference and replace with our registered table name
+        sql_with_table = re.sub(r'"ibis_pandas_memtable_[a-z0-9]+"', '"travel_times"', sql_query)
+        
+        sql_result = conn.execute(sql_with_table).fetchdf()
         conn.close()
-        ibis_conn.disconnect()
         
         # Compare results (allowing for small numerical differences)
         assert regular_result.shape == sql_result.shape, "SQL and regular execution should produce same shape"
@@ -343,11 +345,10 @@ class TestTrafficAnomaly:
         import duckdb
         import ibis
         
-        # Set up DuckDB backend for consistent SQL execution
-        ibis_conn = ibis.duckdb.connect()
-        travel_times_table = ibis_conn.read_in_memory(self.travel_times, table_name='travel_times')
+        # Use the same approach as the package code - ibis.memtable()
+        travel_times_table = ibis.memtable(self.travel_times)
         
-        # First get decomposition using DuckDB backend
+        # First get decomposition using Ibis table (same as package approach)
         decomp = traffic_anomaly.median_decompose(
             data=travel_times_table,
             datetime_column='timestamp',
@@ -378,10 +379,16 @@ class TestTrafficAnomaly:
             return_sql=True
         )
         
-        # Execute SQL directly with the same connection
-        sql_result = ibis_conn.sql(sql_query).execute()
+        # Execute SQL with DuckDB using the original pandas data
+        conn = duckdb.connect()
+        conn.register('travel_times', self.travel_times)
         
-        ibis_conn.disconnect()
+        # Replace the memtable reference in SQL with our registered table
+        import re
+        sql_with_table = re.sub(r'"ibis_pandas_memtable_[a-z0-9]+"', '"travel_times"', sql_query)
+        
+        sql_result = conn.execute(sql_with_table).fetchdf()
+        conn.close()
         
         # Compare anomaly detection results
         assert regular_result.shape == sql_result.shape, "SQL and regular execution should produce same shape"
