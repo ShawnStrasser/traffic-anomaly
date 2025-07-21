@@ -6,7 +6,7 @@ authors = [
 ]
 description = "Robust decomposition and anomaly detection on multiple time series for any SQL backend. Designed for traffic data."
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",

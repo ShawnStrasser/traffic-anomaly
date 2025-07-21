@@ -16,6 +16,8 @@
 
 `traffic-anomaly` is a production ready Python package for robust decomposition and anomaly detection on multiple time series at once. It uses Ibis to integrate with any SQL backend in a production pipeline, or run locally with the included DuckDB backend.
 
+**Tested on:** Windows, macOS, and Ubuntu with Python 3.9-3.13
+
 Designed for real world messy traffic data (volumes, travel times), `traffic-anomaly` uses medians to decompose time series into trend, daily, weekly, and residual components. Anomalies are then classified, and Median Absolute Deviation may be used for further robustness. Missing data are handled, and time periods without sufficient data can be thrown out. Try it out, sample data included! [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1abv0GaEiapu6FFiKEsFI6NFxtX8kgTXb?usp=sharing)
 
 
