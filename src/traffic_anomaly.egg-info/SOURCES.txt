@@ -1,0 +1,16 @@
+LICENSE
+MANIFEST.in
+README.md
+pyproject.toml
+src/traffic_anomaly/__init__.py
+src/traffic_anomaly/decompose.py
+src/traffic_anomaly/find_anomaly.py
+src/traffic_anomaly/sample_data.py
+src/traffic_anomaly.egg-info/PKG-INFO
+src/traffic_anomaly.egg-info/SOURCES.txt
+src/traffic_anomaly.egg-info/dependency_links.txt
+src/traffic_anomaly.egg-info/requires.txt
+src/traffic_anomaly.egg-info/top_level.txt
+src/traffic_anomaly/data/sample_counts.parquet
+src/traffic_anomaly/data/sample_travel_times.parquet
+tests/test_traffic_anomaly.py
