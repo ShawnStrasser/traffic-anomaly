@@ -1,5 +1,19 @@
 # Traffic Anomaly
 
+<!-- Package Info -->
+[![PyPI](https://img.shields.io/pypi/v/traffic-anomaly)](https://pypi.org/project/traffic-anomaly/)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/traffic-anomaly)](https://pypi.org/project/traffic-anomaly/)
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/traffic-anomaly)](https://pypi.org/project/traffic-anomaly/)
+
+<!-- Repository Info -->
+[![GitHub License](https://img.shields.io/github/license/ShawnStrasser/traffic-anomaly)](https://github.com/ShawnStrasser/traffic-anomaly/blob/main/LICENSE)
+[![GitHub issues](https://img.shields.io/github/issues/ShawnStrasser/traffic-anomaly)](https://github.com/ShawnStrasser/traffic-anomaly/issues)
+[![GitHub stars](https://img.shields.io/github/stars/ShawnStrasser/traffic-anomaly)](https://github.com/ShawnStrasser/traffic-anomaly/stargazers)
+
+<!-- Status -->
+[![Unit Tests](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml/badge.svg)](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml)
+[![codecov](https://codecov.io/gh/ShawnStrasser/traffic-anomaly/branch/main/graph/badge.svg)](https://codecov.io/gh/ShawnStrasser/traffic-anomaly)
+
 `traffic-anomaly` is a production ready Python package for robust decomposition and anomaly detection on multiple time series at once. It uses Ibis to integrate with any SQL backend in a production pipeline, or run locally with the included DuckDB backend.
 
 Designed for real world messy traffic data (volumes, travel times), `traffic-anomaly` uses medians to decompose time series into trend, daily, weekly, and residual components. Anomalies are then classified, and Median Absolute Deviation may be used for further robustness. Missing data are handled, and time periods without sufficient data can be thrown out. Try it out, sample data included! [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1abv0GaEiapu6FFiKEsFI6NFxtX8kgTXb?usp=sharing)

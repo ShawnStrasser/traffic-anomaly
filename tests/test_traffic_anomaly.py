@@ -1,0 +1,284 @@
+import pytest
+import pandas as pd
+import numpy as np
+import os
+import sys
+import toml
+
+# Add the src directory to the path to import the package
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+import traffic_anomaly
+from traffic_anomaly import sample_data
+
+
+class TestTrafficAnomaly:
+    """Test suite for traffic_anomaly package"""
+    
+    @classmethod
+    def setup_class(cls):
+        """Set up test data and precalculated results paths"""
+        cls.tests_dir = os.path.dirname(__file__)
+        cls.precalculated_dir = os.path.join(cls.tests_dir, 'precalculated')
+        cls.project_root = os.path.dirname(cls.tests_dir)
+        
+        # Load sample data
+        cls.travel_times = sample_data.travel_times
+        cls.vehicle_counts = sample_data.vehicle_counts
+    
+    def test_version_consistency(self):
+        """Test that version numbers match between __init__.py and pyproject.toml"""
+        # Get version from __init__.py
+        init_version = traffic_anomaly.__version__
+        
+        # Get version from pyproject.toml
+        pyproject_path = os.path.join(self.project_root, 'pyproject.toml')
+        with open(pyproject_path, 'r') as f:
+            pyproject_data = toml.load(f)
+        pyproject_version = pyproject_data['project']['version']
+        
+        assert init_version == pyproject_version, (
+            f"Version mismatch: __init__.py has {init_version}, "
+            f"pyproject.toml has {pyproject_version}"
+        )
+    
+    def test_median_decompose_travel_times(self):
+        """Test median_decompose with travel_times data against precalculated results"""
+        # Calculate decomposition
+        decomp = traffic_anomaly.median_decompose(
+            data=self.travel_times,
+            datetime_column='timestamp',
+            value_column='travel_time',
+            entity_grouping_columns=['id', 'group'],
+            freq_minutes=60,
+            rolling_window_days=7,
+            drop_days=7,
+            min_rolling_window_samples=56,
+            min_time_of_day_samples=7,
+            drop_extras=False,
+            to_sql=False
+        )
+        
+        # Load precalculated results
+        expected_path = os.path.join(self.precalculated_dir, 'test_decomp.parquet')
+        expected = pd.read_parquet(expected_path)
+        
+        # Compare results
+        self._compare_dataframes(decomp, expected, "decompose_travel_times")
+    
+    def test_median_decompose_vehicle_counts(self):
+        """Test median_decompose with vehicle_counts data against precalculated results"""
+        # Calculate decomposition
+        decomp2 = traffic_anomaly.median_decompose(
+            self.vehicle_counts,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            rolling_window_enable=False
+        )
+        
+        # Load precalculated results
+        expected_path = os.path.join(self.precalculated_dir, 'test_decomp2.parquet')
+        expected = pd.read_parquet(expected_path)
+        
+        # Compare results
+        self._compare_dataframes(decomp2, expected, "decompose_vehicle_counts")
+    
+    def test_find_anomaly_basic(self):
+        """Test find_anomaly basic functionality against precalculated results"""
+        # First get the decomposition
+        decomp = traffic_anomaly.median_decompose(
+            data=self.travel_times,
+            datetime_column='timestamp',
+            value_column='travel_time',
+            entity_grouping_columns=['id', 'group'],
+            freq_minutes=60,
+            rolling_window_days=7,
+            drop_days=7,
+            min_rolling_window_samples=56,
+            min_time_of_day_samples=7,
+            drop_extras=False,
+            to_sql=False
+        )
+        
+        # Apply anomaly detection
+        anomaly = traffic_anomaly.find_anomaly(
+            decomposed_data=decomp,
+            datetime_column='timestamp',
+            value_column='travel_time',
+            entity_grouping_columns=['id'],
+            entity_threshold=3.5
+        )
+        
+        # Load precalculated results
+        expected_path = os.path.join(self.precalculated_dir, 'test_anomaly.parquet')
+        expected = pd.read_parquet(expected_path)
+        
+        # Compare results
+        self._compare_dataframes(anomaly, expected, "find_anomaly_basic")
+    
+    def test_find_anomaly_with_mad(self):
+        """Test find_anomaly with MAD=True against precalculated results"""
+        # First get the decomposition
+        decomp = traffic_anomaly.median_decompose(
+            data=self.travel_times,
+            datetime_column='timestamp',
+            value_column='travel_time',
+            entity_grouping_columns=['id', 'group'],
+            freq_minutes=60,
+            rolling_window_days=7,
+            drop_days=7,
+            min_rolling_window_samples=56,
+            min_time_of_day_samples=7,
+            drop_extras=False,
+            to_sql=False
+        )
+        
+        # Apply anomaly detection with MAD
+        anomaly2 = traffic_anomaly.find_anomaly(
+            decomposed_data=decomp,
+            datetime_column='timestamp',
+            value_column='travel_time',
+            entity_grouping_columns=['id'],
+            entity_threshold=3.5,
+            group_grouping_columns=['group'],
+            MAD=True
+        )
+        
+        # Load precalculated results
+        expected_path = os.path.join(self.precalculated_dir, 'test_anomaly2.parquet')
+        expected = pd.read_parquet(expected_path)
+        
+        # Compare results
+        self._compare_dataframes(anomaly2, expected, "find_anomaly_with_mad")
+    
+    def test_find_anomaly_with_geh(self):
+        """Test find_anomaly with GEH=True against precalculated results"""
+        # First get the decomposition for vehicle counts
+        decomp2 = traffic_anomaly.median_decompose(
+            self.vehicle_counts,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            rolling_window_enable=False
+        )
+        
+        # Apply anomaly detection with GEH
+        anomaly3 = traffic_anomaly.find_anomaly(
+            decomposed_data=decomp2,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            entity_threshold=6.0,
+            GEH=True,
+            MAD=False,
+            log_adjust_negative=True,
+            return_sql=False
+        )
+        
+        # Load precalculated results
+        expected_path = os.path.join(self.precalculated_dir, 'test_anomaly3.parquet')
+        expected = pd.read_parquet(expected_path)
+        
+        # Compare results
+        self._compare_dataframes(anomaly3, expected, "find_anomaly_with_geh")
+    
+    def _compare_dataframes(self, actual, expected, test_name):
+        """Helper method to compare two dataframes with detailed error reporting"""
+        
+        # Check if both are DataFrames
+        assert isinstance(actual, pd.DataFrame), f"{test_name}: Actual result is not a DataFrame"
+        assert isinstance(expected, pd.DataFrame), f"{test_name}: Expected result is not a DataFrame"
+        
+        # Check shape
+        assert actual.shape == expected.shape, (
+            f"{test_name}: Shape mismatch - actual: {actual.shape}, expected: {expected.shape}"
+        )
+        
+        # Check columns
+        assert list(actual.columns) == list(expected.columns), (
+            f"{test_name}: Column mismatch - actual: {list(actual.columns)}, "
+            f"expected: {list(expected.columns)}"
+        )
+        
+        # Sort both dataframes by all columns to ensure consistent ordering
+        # Convert datetime columns to string temporarily for sorting
+        actual_sorted = actual.copy()
+        expected_sorted = expected.copy()
+        
+        for col in actual.columns:
+            if pd.api.types.is_datetime64_any_dtype(actual[col]):
+                actual_sorted[col] = actual[col].astype(str)
+                expected_sorted[col] = expected[col].astype(str)
+        
+        # Sort by all columns
+        sort_columns = list(actual_sorted.columns)
+        actual_sorted = actual_sorted.sort_values(sort_columns).reset_index(drop=True)
+        expected_sorted = expected_sorted.sort_values(sort_columns).reset_index(drop=True)
+        
+        # Restore datetime columns in sorted dataframes
+        for col in actual.columns:
+            if pd.api.types.is_datetime64_any_dtype(actual[col]):
+                actual_sorted[col] = pd.to_datetime(actual_sorted[col])
+                expected_sorted[col] = pd.to_datetime(expected_sorted[col])
+        
+        # Compare each column
+        for col in actual.columns:
+            if pd.api.types.is_numeric_dtype(actual[col]):
+                # For numeric columns, use np.allclose for floating point comparison
+                # Using 0.1 tolerance for 1 decimal place accuracy
+                if not np.allclose(actual_sorted[col].fillna(0), 
+                                 expected_sorted[col].fillna(0), 
+                                 rtol=0.1, atol=0.1, equal_nan=True):
+                    
+                    # Find the first differing value for detailed error
+                    mask = ~np.isclose(actual_sorted[col].fillna(0), 
+                                     expected_sorted[col].fillna(0), 
+                                     rtol=0.1, atol=0.1, equal_nan=True)
+                    if mask.any():
+                        first_diff_idx = np.argmax(mask)
+                        actual_val = actual_sorted[col].iloc[first_diff_idx]
+                        expected_val = expected_sorted[col].iloc[first_diff_idx]
+                        
+                        pytest.fail(
+                            f"{test_name}: Numeric values differ in column '{col}' at index {first_diff_idx}:\n"
+                            f"  Actual: {actual_val}\n"
+                            f"  Expected: {expected_val}\n"
+                            f"  Difference: {abs(actual_val - expected_val) if pd.notna(actual_val) and pd.notna(expected_val) else 'NaN comparison'}"
+                        )
+            
+            elif pd.api.types.is_datetime64_any_dtype(actual[col]):
+                # For datetime columns, compare directly
+                if not actual_sorted[col].equals(expected_sorted[col]):
+                    # Find first differing value
+                    mask = actual_sorted[col] != expected_sorted[col]
+                    if mask.any():
+                        first_diff_idx = mask.idxmax()
+                        actual_val = actual_sorted[col].iloc[first_diff_idx]
+                        expected_val = expected_sorted[col].iloc[first_diff_idx]
+                        
+                        pytest.fail(
+                            f"{test_name}: Datetime values differ in column '{col}' at index {first_diff_idx}:\n"
+                            f"  Actual: {actual_val}\n"
+                            f"  Expected: {expected_val}"
+                        )
+            
+            else:
+                # For other columns (strings, etc.), compare directly
+                if not actual_sorted[col].equals(expected_sorted[col]):
+                    # Find first differing value
+                    mask = actual_sorted[col] != expected_sorted[col]
+                    if mask.any():
+                        first_diff_idx = mask.idxmax()
+                        actual_val = actual_sorted[col].iloc[first_diff_idx]
+                        expected_val = expected_sorted[col].iloc[first_diff_idx]
+                        
+                        pytest.fail(
+                            f"{test_name}: Values differ in column '{col}' at index {first_diff_idx}:\n"
+                            f"  Actual: {actual_val}\n"
+                            f"  Expected: {expected_val}"
+                        )
+
+
+if __name__ == "__main__":
+    pytest.main([__file__]) 

@@ -66,7 +66,7 @@ def median_decompose(data,
     window = ibis.window(
         group_by=entity_grouping_columns,
         order_by=datetime_column,
-        preceding=ibis.interval(hours=(24 * rolling_window_days) - 1),
+        preceding=ibis.interval(days=rolling_window_days),
         following=0
     )
 
