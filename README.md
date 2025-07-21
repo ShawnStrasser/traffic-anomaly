@@ -12,7 +12,7 @@
 
 <!-- Status -->
 [![Unit Tests](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml/badge.svg)](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml)
-[![codecov](https://codecov.io/gh/ShawnStrasser/traffic-anomaly/branch/main/graph/badge.svg)](https://codecov.io/gh/ShawnStrasser/traffic-anomaly)
+[![codecov](https://codecov.io/gh/ShawnStrasser/traffic-anomaly/badge.svg)](https://codecov.io/gh/ShawnStrasser/traffic-anomaly)
 
 `traffic-anomaly` is a production ready Python package for robust decomposition and anomaly detection on multiple time series at once. It uses Ibis to integrate with any SQL backend in a production pipeline, or run locally with the included DuckDB backend.
 
