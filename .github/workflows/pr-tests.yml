@@ -20,7 +20,7 @@ jobs:
       fail-fast: true
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
-        python-version: ['3.10', '3.11', '3.12']
+        python-version: ['3.7', '3.12', '3.13']
 
     steps:
     - uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
         files: ./coverage.xml
         fail_ci_if_error: false
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
 
     - name: Upload pytest results
       uses: actions/upload-artifact@v4
