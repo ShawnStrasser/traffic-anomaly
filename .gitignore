@@ -19,3 +19,5 @@ src/*.egg-info/
 .coverage
 coverage.xml
 htmlcov/
+
+archive/

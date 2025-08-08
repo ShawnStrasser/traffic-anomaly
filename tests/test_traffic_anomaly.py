@@ -42,10 +42,10 @@ class TestTrafficAnomaly:
             f"pyproject.toml has {pyproject_version}"
         )
     
-    def test_median_decompose_travel_times(self):
-        """Test median_decompose with travel_times data against precalculated results"""
+    def test_decompose_travel_times(self):
+        """Test decompose with travel_times data against precalculated results"""
         # Calculate decomposition
-        decomp = traffic_anomaly.median_decompose(
+        decomp = traffic_anomaly.decompose(
             data=self.travel_times,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -56,7 +56,7 @@ class TestTrafficAnomaly:
             min_rolling_window_samples=56,
             min_time_of_day_samples=7,
             drop_extras=False,
-            to_sql=False
+            return_sql=False
         )
         
         # Load precalculated results
@@ -66,10 +66,10 @@ class TestTrafficAnomaly:
         # Compare results
         self._compare_dataframes(decomp, expected, "decompose_travel_times")
     
-    def test_median_decompose_vehicle_counts(self):
-        """Test median_decompose with vehicle_counts data against precalculated results"""
+    def test_decompose_vehicle_counts(self):
+        """Test decompose with vehicle_counts data against precalculated results"""
         # Calculate decomposition
-        decomp2 = traffic_anomaly.median_decompose(
+        decomp2 = traffic_anomaly.decompose(
             self.vehicle_counts,
             datetime_column='timestamp',
             value_column='total',
@@ -84,10 +84,10 @@ class TestTrafficAnomaly:
         # Compare results
         self._compare_dataframes(decomp2, expected, "decompose_vehicle_counts")
     
-    def test_find_anomaly_basic(self):
-        """Test find_anomaly basic functionality against precalculated results"""
+    def test_anomaly_basic(self):
+        """Test anomaly basic functionality against precalculated results"""
         # First get the decomposition
-        decomp = traffic_anomaly.median_decompose(
+        decomp = traffic_anomaly.decompose(
             data=self.travel_times,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -98,11 +98,11 @@ class TestTrafficAnomaly:
             min_rolling_window_samples=56,
             min_time_of_day_samples=7,
             drop_extras=False,
-            to_sql=False
+            return_sql=False
         )
         
         # Apply anomaly detection
-        anomaly = traffic_anomaly.find_anomaly(
+        anomaly = traffic_anomaly.anomaly(
             decomposed_data=decomp,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -115,12 +115,12 @@ class TestTrafficAnomaly:
         expected = pd.read_parquet(expected_path)
         
         # Compare results
-        self._compare_dataframes(anomaly, expected, "find_anomaly_basic")
+        self._compare_dataframes(anomaly, expected, "anomaly_basic")
     
-    def test_find_anomaly_with_mad(self):
-        """Test find_anomaly with MAD=True against precalculated results"""
+    def test_anomaly_with_mad(self):
+        """Test anomaly with MAD=True against precalculated results"""
         # First get the decomposition
-        decomp = traffic_anomaly.median_decompose(
+        decomp = traffic_anomaly.decompose(
             data=self.travel_times,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -131,11 +131,11 @@ class TestTrafficAnomaly:
             min_rolling_window_samples=56,
             min_time_of_day_samples=7,
             drop_extras=False,
-            to_sql=False
+            return_sql=False
         )
         
         # Apply anomaly detection with MAD
-        anomaly2 = traffic_anomaly.find_anomaly(
+        anomaly2 = traffic_anomaly.anomaly(
             decomposed_data=decomp,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -150,12 +150,12 @@ class TestTrafficAnomaly:
         expected = pd.read_parquet(expected_path)
         
         # Compare results
-        self._compare_dataframes(anomaly2, expected, "find_anomaly_with_mad")
+        self._compare_dataframes(anomaly2, expected, "anomaly_with_mad")
     
-    def test_find_anomaly_with_geh(self):
-        """Test find_anomaly with GEH=True against precalculated results"""
+    def test_anomaly_with_geh(self):
+        """Test anomaly with GEH=True against precalculated results"""
         # First get the decomposition for vehicle counts
-        decomp2 = traffic_anomaly.median_decompose(
+        decomp2 = traffic_anomaly.decompose(
             self.vehicle_counts,
             datetime_column='timestamp',
             value_column='total',
@@ -164,7 +164,7 @@ class TestTrafficAnomaly:
         )
         
         # Apply anomaly detection with GEH
-        anomaly3 = traffic_anomaly.find_anomaly(
+        anomaly3 = traffic_anomaly.anomaly(
             decomposed_data=decomp2,
             datetime_column='timestamp',
             value_column='total',
@@ -181,7 +181,53 @@ class TestTrafficAnomaly:
         expected = pd.read_parquet(expected_path)
         
         # Compare results
-        self._compare_dataframes(anomaly3, expected, "find_anomaly_with_geh")
+        self._compare_dataframes(anomaly3, expected, "anomaly_with_geh")
+    
+    def test_changepoint_robust(self):
+        """Test changepoint detection with robust=True against precalculated results"""
+        # Load sample changepoint input data
+        sample_data_path = os.path.join(self.project_root, 'src', 'traffic_anomaly', 'data', 'sample_changepoint_input.parquet')
+        df = pd.read_parquet(sample_data_path)
+        
+        # Calculate changepoints with robust=True
+        changepoints_robust = traffic_anomaly.changepoint(
+            df,
+            value_column='travel_time_seconds',
+            entity_grouping_column='ID',
+            datetime_column='TimeStamp',
+            score_threshold=0.7,
+            robust=True
+        )
+        
+        # Load precalculated results
+        expected_path = os.path.join(self.precalculated_dir, 'test_changepoint_robust.parquet')
+        expected = pd.read_parquet(expected_path)
+        
+        # Compare results
+        self._compare_dataframes(changepoints_robust, expected, "changepoint_robust")
+    
+    def test_changepoint_standard(self):
+        """Test changepoint detection with robust=False against precalculated results"""
+        # Load sample changepoint input data
+        sample_data_path = os.path.join(self.project_root, 'src', 'traffic_anomaly', 'data', 'sample_changepoint_input.parquet')
+        df = pd.read_parquet(sample_data_path)
+        
+        # Calculate changepoints with robust=False
+        changepoints_standard = traffic_anomaly.changepoint(
+            df,
+            value_column='travel_time_seconds',
+            entity_grouping_column='ID',
+            datetime_column='TimeStamp',
+            score_threshold=0.7,
+            robust=False
+        )
+        
+        # Load precalculated results
+        expected_path = os.path.join(self.precalculated_dir, 'test_changepoint.parquet')
+        expected = pd.read_parquet(expected_path)
+        
+        # Compare results
+        self._compare_dataframes(changepoints_standard, expected, "changepoint_standard")
     
     def _compare_dataframes(self, actual, expected, test_name):
         """Helper method to compare two dataframes with detailed error reporting"""
@@ -289,7 +335,7 @@ class TestTrafficAnomaly:
         travel_times_table = ibis.memtable(self.travel_times)
         
         # Get regular result using Ibis table (same as package approach)
-        regular_result = traffic_anomaly.median_decompose(
+        regular_result = traffic_anomaly.decompose(
             data=travel_times_table,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -298,11 +344,11 @@ class TestTrafficAnomaly:
             drop_days=3,
             min_rolling_window_samples=10,
             drop_extras=False,
-            to_sql=False
+            return_sql=False
         ).execute()
         
         # Get SQL query using the same Ibis table
-        sql_query = traffic_anomaly.median_decompose(
+        sql_query = traffic_anomaly.decompose(
             data=travel_times_table,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -311,7 +357,7 @@ class TestTrafficAnomaly:
             drop_days=3,
             min_rolling_window_samples=10,
             drop_extras=False,
-            to_sql=True
+            return_sql=True
         )
         
         # Execute SQL with DuckDB using the original pandas data
@@ -340,8 +386,8 @@ class TestTrafficAnomaly:
                     assert np.allclose(regular_sorted.fillna(0), sql_sorted.fillna(0), rtol=0.1), \
                         f"SQL and regular results should match for {col}"
 
-    def test_sql_execution_equivalence_find_anomaly(self):
-        """Test that SQL output from find_anomaly produces equivalent results when executed"""
+    def test_sql_execution_equivalence_anomaly(self):
+        """Test that SQL output from anomaly produces equivalent results when executed"""
         import duckdb
         import ibis
         
@@ -349,7 +395,7 @@ class TestTrafficAnomaly:
         travel_times_table = ibis.memtable(self.travel_times)
         
         # First get decomposition using Ibis table (same as package approach)
-        decomp = traffic_anomaly.median_decompose(
+        decomp = traffic_anomaly.decompose(
             data=travel_times_table,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -361,7 +407,7 @@ class TestTrafficAnomaly:
         )
         
         # Get both regular result and SQL using the same Ibis expression
-        regular_result = traffic_anomaly.find_anomaly(
+        regular_result = traffic_anomaly.anomaly(
             decomposed_data=decomp,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -370,7 +416,7 @@ class TestTrafficAnomaly:
             return_sql=False
         ).execute()
         
-        sql_query = traffic_anomaly.find_anomaly(
+        sql_query = traffic_anomaly.anomaly(
             decomposed_data=decomp,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -407,7 +453,7 @@ class TestTrafficAnomaly:
         small_data = self.travel_times.head(200)  # Just 200 rows for speed
         
         # Rolling decomposition with simple parameters
-        rolling_result = traffic_anomaly.median_decompose(
+        rolling_result = traffic_anomaly.decompose(
             data=small_data,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -420,7 +466,7 @@ class TestTrafficAnomaly:
         )
         
         # Static decomposition  
-        static_result = traffic_anomaly.median_decompose(
+        static_result = traffic_anomaly.decompose(
             data=small_data,
             datetime_column='timestamp',
             value_column='travel_time',
@@ -454,7 +500,7 @@ class TestTrafficAnomaly:
         small_vehicle_data = self.vehicle_counts.head(500)
         
         # Get decomposition for vehicle counts (good for GEH)
-        decomp = traffic_anomaly.median_decompose(
+        decomp = traffic_anomaly.decompose(
             small_vehicle_data,
             datetime_column='timestamp',
             value_column='total',
@@ -464,7 +510,7 @@ class TestTrafficAnomaly:
         )
         
         # GEH-based detection
-        geh_result = traffic_anomaly.find_anomaly(
+        geh_result = traffic_anomaly.anomaly(
             decomposed_data=decomp,
             datetime_column='timestamp',
             value_column='total',
@@ -474,7 +520,7 @@ class TestTrafficAnomaly:
         )
         
         # Z-score based detection
-        zscore_result = traffic_anomaly.find_anomaly(
+        zscore_result = traffic_anomaly.anomaly(
             decomposed_data=decomp,
             datetime_column='timestamp',
             value_column='total',
@@ -516,7 +562,7 @@ class TestTrafficAnomaly:
         small_vehicle_data = self.vehicle_counts.head(500)
         
         # Get decomposition with some zero/low values
-        decomp = traffic_anomaly.median_decompose(
+        decomp = traffic_anomaly.decompose(
             small_vehicle_data,
             datetime_column='timestamp',
             value_column='total',
@@ -526,7 +572,7 @@ class TestTrafficAnomaly:
         )
         
         # Without log adjustment
-        normal_result = traffic_anomaly.find_anomaly(
+        normal_result = traffic_anomaly.anomaly(
             decomposed_data=decomp,
             datetime_column='timestamp',
             value_column='total',
@@ -537,7 +583,7 @@ class TestTrafficAnomaly:
         )
         
         # With log adjustment
-        log_adjusted_result = traffic_anomaly.find_anomaly(
+        log_adjusted_result = traffic_anomaly.anomaly(
             decomposed_data=decomp,
             datetime_column='timestamp',
             value_column='total',
@@ -568,8 +614,8 @@ class TestTrafficAnomaly:
         # Test missing required columns with minimal decomposed data
         incomplete_data = pd.DataFrame({'id': [1], 'timestamp': ['2022-01-01']})
         
-        with pytest.raises(AssertionError, match="prediction column not found"):
-            traffic_anomaly.find_anomaly(
+        with pytest.raises(ValueError, match="Missing required columns"):
+            traffic_anomaly.anomaly(
                 decomposed_data=incomplete_data,
                 datetime_column='timestamp',
                 value_column='travel_time',
@@ -577,7 +623,7 @@ class TestTrafficAnomaly:
             )
         
         # Test parameter validation - invalid grouping columns type
-        good_decomp = traffic_anomaly.median_decompose(
+        good_decomp = traffic_anomaly.decompose(
             data=self.travel_times.head(50),  # Small for speed
             datetime_column='timestamp',
             value_column='travel_time',
@@ -587,7 +633,7 @@ class TestTrafficAnomaly:
         )
         
         with pytest.raises(AssertionError, match="entity_grouping_columns must be a list"):
-            traffic_anomaly.find_anomaly(
+            traffic_anomaly.anomaly(
                 decomposed_data=good_decomp,
                 datetime_column='timestamp',
                 value_column='travel_time',

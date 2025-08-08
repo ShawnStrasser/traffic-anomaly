@@ -1,7 +1,8 @@
-from .decompose import median_decompose
-from .find_anomaly import find_anomaly
+from .decompose import decompose
+from .anomaly import anomaly
+from .changepoint import changepoint
 from .sample_data import sample_data
 
-__all__ = ['decompose', 'find_anomaly']
+__all__ = ['decompose', 'anomaly', 'changepoint']
 
-__version__ = '1.0.5'
+__version__ = '2.0.0'

@@ -9,6 +9,7 @@ class SampleData:
     def __init__(self):
         self.vehicle_counts = pd.read_parquet(os.path.join(data_dir, 'sample_counts.parquet'))
         self.travel_times = pd.read_parquet(os.path.join(data_dir, 'sample_travel_times.parquet'))
+        self.changepoints_input = pd.read_parquet(os.path.join(data_dir, 'sample_changepoint_input.parquet'))
 
 # Create an instance of the class
 sample_data = SampleData()

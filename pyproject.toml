@@ -1,10 +1,10 @@
 [project]
 name = "traffic_anomaly"
-version = "1.0.5"
+version = "2.0.0"
 authors = [
   { name="Shawn Strasser", email="shawn.strasser@odot.oregon.gov" },
 ]
-description = "Robust decomposition and anomaly detection on multiple time series for any SQL backend. Designed for traffic data."
+description = "Robust decomposition, anomaly and changepoint detection on multiple time series for any SQL backend. Designed for traffic data."
 readme = "README.md"
 requires-python = ">=3.9"
 classifiers = [
