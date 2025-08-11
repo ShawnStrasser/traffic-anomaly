@@ -15,12 +15,57 @@ on:
 
 jobs:
   test:
+    name: tests (${{ matrix.os }}, py${{ matrix.python-version }}, ibis ${{ matrix.ibis-major }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-        python-version: ['3.9', '3.12', '3.13']
+        include:
+          # Ubuntu focus (min, mid, max Python; both ibis)
+          - os: ubuntu-latest
+            python-version: '3.9'
+            ibis-major: '9'
+            ibis-spec: '>=9,<10'
+          - os: ubuntu-latest
+            python-version: '3.13'
+            ibis-major: '10'
+            ibis-spec: '>=10,<11'
+          - os: ubuntu-latest
+            python-version: '3.11'
+            ibis-major: '10'
+            ibis-spec: '>=10,<11'
+          - os: ubuntu-latest
+            python-version: '3.11'
+            ibis-major: '9'
+            ibis-spec: '>=9,<10'
+
+          # Windows coverage (two distinct Pythons; both ibis)
+          - os: windows-latest
+            python-version: '3.10'
+            ibis-major: '9'
+            ibis-spec: '>=9,<10'
+          - os: windows-latest
+            python-version: '3.12'
+            ibis-major: '10'
+            ibis-spec: '>=10,<11'
+          - os: windows-latest
+            python-version: '3.9'
+            ibis-major: '10'
+            ibis-spec: '>=10,<11'
+
+          # macOS coverage (two distinct Pythons; both ibis)
+          - os: macos-latest
+            python-version: '3.12'
+            ibis-major: '9'
+            ibis-spec: '>=9,<10'
+          - os: macos-latest
+            python-version: '3.10'
+            ibis-major: '10'
+            ibis-spec: '>=10,<11'
+          - os: macos-latest
+            python-version: '3.13'
+            ibis-major: '9'
+            ibis-spec: '>=9,<10'
 
     steps:
     - uses: actions/checkout@v4
@@ -33,7 +78,9 @@ jobs:
     - name: Install dependencies
       run: |
         pip install pytest pytest-cov build pandas pyarrow toml
-        pip install .
+        pip install "ibis-framework[duckdb]${{ matrix.ibis-spec }}"
+        # Install the package without deps so the pinned ibis stays in place
+        pip install --no-deps .
 
     - name: Build package
       run: python -m build
@@ -52,7 +99,7 @@ jobs:
     - name: Upload pytest results
       uses: actions/upload-artifact@v4
       with:
-        name: pytest-results-${{ matrix.os }}-${{ matrix.python-version }}
+        name: pytest-results-${{ matrix.os }}-py${{ matrix.python-version }}-ibis${{ matrix.ibis-major }}
         path: pytest-results.xml
       if: ${{ always() }}
 
@@ -81,4 +128,4 @@ jobs:
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-      run: twine upload dist/* 
+      run: twine upload dist/*

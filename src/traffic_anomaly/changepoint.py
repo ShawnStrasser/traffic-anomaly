@@ -4,6 +4,8 @@ from typing import Union, List, Any
 # Note: This function accepts ibis.Expr or pandas.DataFrame as input
 # pandas is not required - ibis.memtable() can handle pandas DataFrames if pandas is available
 
+INTERVAL_EPSILON = ibis.interval(seconds=1)
+EPSILON = 1e-6
 
 def _validate_columns(table: ibis.Expr, datetime_column: str, value_column: str, entity_grouping_column: Union[str, List[str]]) -> None:
     """Validate that required columns exist in the table."""
@@ -115,27 +117,34 @@ def changepoint(
     
     # Normalize entity_grouping_column to always be a list
     grouping_columns = [entity_grouping_column] if isinstance(entity_grouping_column, str) else entity_grouping_column
-    
+
+    # Shift value_column forward for the left window
+    table = table.mutate(
+        lag_column=_[value_column].lag(1).over(
+            ibis.window(group_by=grouping_columns, order_by=datetime_column)
+        )
+    )
+
     # Create windows for each variance calculation
     left_window = ibis.window(
         group_by=grouping_columns,
         order_by=datetime_column,
-        preceding=ibis.interval(days=rolling_window_days // 2),
-        following=-1  # remove current row from the left window
+        preceding=ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON,  # added because values will be shifted forward to remove the current row
+        following=0
     )
 
     right_window = ibis.window(
         group_by=grouping_columns,
         order_by=datetime_column,
         preceding=0,
-        following=ibis.interval(days=rolling_window_days // 2) - ibis.interval(seconds=1)
+        following=ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON
     )
 
     combined_window = ibis.window(
         group_by=grouping_columns,
         order_by=datetime_column,
         preceding=ibis.interval(days=rolling_window_days // 2),
-        following=ibis.interval(days=rolling_window_days // 2) - ibis.interval(seconds=1)
+        following=ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON
     )
     
     if robust:
@@ -150,8 +159,8 @@ def changepoint(
         # Step 2: Calculate quantiles for each window
         table_with_quantiles = table_with_rn.mutate(
             # Left window quantiles
-            left_lower=_[value_column].quantile(lower_bound).over(left_window),
-            left_upper=_[value_column].quantile(upper_bound).over(left_window),
+            left_lower=_['lag_column'].quantile(lower_bound).over(left_window),
+            left_upper=_['lag_column'].quantile(upper_bound).over(left_window),
             
             # Right window quantiles  
             right_lower=_[value_column].quantile(lower_bound).over(right_window),
@@ -195,7 +204,7 @@ def changepoint(
         # Right variance
         join_conditions_right = [
             neighbor[datetime_column] > center[datetime_column],
-            neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - ibis.interval(seconds=1))
+            neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON)
         ]
         # Add grouping column conditions
         for col in grouping_columns:
@@ -221,7 +230,7 @@ def changepoint(
         # Combined variance
         join_conditions_combined = [
             neighbor[datetime_column] >= (center[datetime_column] - ibis.interval(days=rolling_window_days // 2)),
-            neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - ibis.interval(seconds=1)),
+            neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON),
             neighbor[datetime_column] != center[datetime_column]
         ]
         # Add grouping column conditions
@@ -296,7 +305,7 @@ def changepoint(
     else:
         # Standard variance calculation
         result = table.mutate(
-            Left_Var=_[value_column].var().over(left_window),
+            Left_Var=_['lag_column'].var().over(left_window),
             Right_Var=_[value_column].var().over(right_window),
             Combined_Var=_[value_column].var().over(combined_window)
         )
@@ -315,19 +324,19 @@ def changepoint(
     # Add cost and score columns, making score NaN if the window is incomplete
     half_window_interval = ibis.interval(days=rolling_window_days // 2)
     result = result.mutate(
-        Combined_Cost=(20 * (result['Combined_Var'] + 0.0000000001).ln()),
-        Left_Cost=(10 * (result['Left_Var'] + 0.0000000001).ln()),
-        Right_Cost=(10 * (result['Right_Var'] + 0.0000000001).ln())
+        Combined_Cost=(20 * (result['Combined_Var'] + EPSILON).ln()),
+        Left_Cost=(10 * (result['Left_Var'] + EPSILON).ln()),
+        Right_Cost=(10 * (result['Right_Var'] + EPSILON).ln())
     )
     result = result.mutate(
-        score=ibis.case()
-            .when(
+        score=ibis.cases(
+            (
                 (result[datetime_column] >= result['min_ts'] + half_window_interval) &
                 (result[datetime_column] <= result['max_ts'] - half_window_interval),
                 result['Combined_Cost'] - result['Left_Cost'] - result['Right_Cost']
-            )
-            .else_(None)
-            .end()
+            ),
+            else_=None
+        )
     )
 
     # Clean up intermediate columns and create scores table
@@ -337,7 +346,7 @@ def changepoint(
     ]).order_by(_[datetime_column])
     
     # Identify changepoints
-    table_for_changepoints = ibis.memtable(scores_table.execute().dropna())
+    table_for_changepoints = scores_table.filter(_["score"].notnull())
 
     # Create windows for peak detection
     peak_window = ibis.window(
@@ -349,8 +358,8 @@ def changepoint(
     window_before = ibis.window(
         group_by=grouping_columns,
         order_by=datetime_column,
-        preceding=ibis.interval(days=min_separation_days),
-        following=-1
+        preceding=ibis.interval(days=min_separation_days)-INTERVAL_EPSILON, #added because values will be shited forward to remove the current row
+        following=0
     )
     window_after = ibis.window(
         group_by=grouping_columns,
@@ -361,12 +370,12 @@ def changepoint(
 
     changepoints = table_for_changepoints.mutate(
         is_local_peak=((_.score == _.score.max().over(peak_window)) & (_.score > score_threshold)),
-        avg_before=(_[value_column].mean().over(window_before)),
+    avg_before=(_['lag_column'].mean().over(window_before)),
         avg_after=(_[value_column].mean().over(window_after)),
     )
 
     # Filter to local peaks
-    changepoints = changepoints[changepoints['is_local_peak']]
+    changepoints = changepoints.filter(changepoints['is_local_peak'])
     changepoints = changepoints.mutate(
         avg_diff=changepoints['avg_after'] - changepoints['avg_before']
     )
