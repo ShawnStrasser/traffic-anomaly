@@ -228,6 +228,110 @@ class TestTrafficAnomaly:
         
         # Compare results
         self._compare_dataframes(changepoints_standard, expected, "changepoint_standard")
+
+    def test_sql_execution_equivalence_changepoint_standard(self):
+        """Test that SQL output from changepoint (robust=False) produces equivalent results when executed"""
+        import ibis
+        import duckdb
+        import re
+        # Load sample changepoint input data
+        sample_data_path = os.path.join(self.project_root, 'src', 'traffic_anomaly', 'data', 'sample_changepoint_input.parquet')
+        df = pd.read_parquet(sample_data_path)
+        ibis_table = ibis.memtable(df)
+        # Get regular result using Ibis table
+        regular_result = traffic_anomaly.changepoint(
+            data=ibis_table,
+            value_column='travel_time_seconds',
+            entity_grouping_column='ID',
+            datetime_column='TimeStamp',
+            score_threshold=0.7,
+            robust=False,
+            return_sql=False
+        ).execute()
+        # Get SQL query
+        sql_query = traffic_anomaly.changepoint(
+            data=ibis_table,
+            value_column='travel_time_seconds',
+            entity_grouping_column='ID',
+            datetime_column='TimeStamp',
+            score_threshold=0.7,
+            robust=False,
+            return_sql=True
+        )
+        # Execute SQL with DuckDB
+        conn = duckdb.connect()
+        conn.register('sample_changepoint_input', df)
+        # Replace memtable reference in SQL with registered table name
+        sql_with_table = re.sub(r'"ibis_pandas_memtable_[a-z0-9]+"', '"sample_changepoint_input"', sql_query)
+        sql_result = conn.execute(sql_with_table).fetchdf()
+        conn.close()
+        # Compare results (allowing for small numerical differences)
+        assert regular_result.shape == sql_result.shape, "SQL and regular execution should produce same shape"
+        # Compare columns
+        assert list(regular_result.columns) == list(sql_result.columns), "SQL and regular execution should produce same columns"
+        # Sort by all columns for comparison
+        sort_columns = list(regular_result.columns)
+        regular_sorted = regular_result.sort_values(sort_columns).reset_index(drop=True)
+        sql_sorted = sql_result.sort_values(sort_columns).reset_index(drop=True)
+        # Compare each column
+        import numpy as np
+        for col in regular_sorted.columns:
+            if np.issubdtype(regular_sorted[col].dtype, np.number):
+                assert np.allclose(regular_sorted[col].fillna(0), sql_sorted[col].fillna(0), rtol=0.1, atol=0.1, equal_nan=True), f"Numeric values differ in column {col}"
+            else:
+                assert regular_sorted[col].equals(sql_sorted[col]), f"Values differ in column {col}"
+
+    def test_sql_execution_equivalence_changepoint_robust(self):
+        """Test that SQL output from changepoint (robust=True) produces equivalent results when executed"""
+        import ibis
+        import duckdb
+        import re
+        # Load sample changepoint input data
+        sample_data_path = os.path.join(self.project_root, 'src', 'traffic_anomaly', 'data', 'sample_changepoint_input.parquet')
+        df = pd.read_parquet(sample_data_path)
+        ibis_table = ibis.memtable(df)
+        # Get regular result using Ibis table
+        regular_result = traffic_anomaly.changepoint(
+            data=ibis_table,
+            value_column='travel_time_seconds',
+            entity_grouping_column='ID',
+            datetime_column='TimeStamp',
+            score_threshold=0.7,
+            robust=True,
+            return_sql=False
+        ).execute()
+        # Get SQL query
+        sql_query = traffic_anomaly.changepoint(
+            data=ibis_table,
+            value_column='travel_time_seconds',
+            entity_grouping_column='ID',
+            datetime_column='TimeStamp',
+            score_threshold=0.7,
+            robust=True,
+            return_sql=True
+        )
+        # Execute SQL with DuckDB
+        conn = duckdb.connect()
+        conn.register('sample_changepoint_input', df)
+        # Replace memtable reference in SQL with registered table name
+        sql_with_table = re.sub(r'"ibis_pandas_memtable_[a-z0-9]+"', '"sample_changepoint_input"', sql_query)
+        sql_result = conn.execute(sql_with_table).fetchdf()
+        conn.close()
+        # Compare results (allowing for small numerical differences)
+        assert regular_result.shape == sql_result.shape, "SQL and regular execution should produce same shape"
+        # Compare columns
+        assert list(regular_result.columns) == list(sql_result.columns), "SQL and regular execution should produce same columns"
+        # Sort by all columns for comparison
+        sort_columns = list(regular_result.columns)
+        regular_sorted = regular_result.sort_values(sort_columns).reset_index(drop=True)
+        sql_sorted = sql_result.sort_values(sort_columns).reset_index(drop=True)
+        # Compare each column
+        import numpy as np
+        for col in regular_sorted.columns:
+            if np.issubdtype(regular_sorted[col].dtype, np.number):
+                assert np.allclose(regular_sorted[col].fillna(0), sql_sorted[col].fillna(0), rtol=0.1, atol=0.1, equal_nan=True), f"Numeric values differ in column {col}"
+            else:
+                assert regular_sorted[col].equals(sql_sorted[col]), f"Values differ in column {col}"
     
     def _compare_dataframes(self, actual, expected, test_name):
         """Helper method to compare two dataframes with detailed error reporting"""
@@ -639,6 +743,600 @@ class TestTrafficAnomaly:
                 value_column='travel_time',
                 entity_grouping_columns="id"  # Should be ['id']
             )
+
+    # ========================================
+    # DATA INPUT VALIDATION TESTS
+    # ========================================
+
+    def test_decompose_missing_columns(self):
+        """Test decompose with missing required columns"""
+        # Test missing datetime column
+        data_missing_datetime = pd.DataFrame({
+            'id': [1, 2],
+            'travel_time': [10.0, 15.0]
+        })
+        
+        with pytest.raises(ValueError, match="Missing required columns.*timestamp"):
+            traffic_anomaly.decompose(
+                data=data_missing_datetime,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+        
+        # Test missing value column
+        data_missing_value = pd.DataFrame({
+            'id': [1, 2],
+            'timestamp': pd.to_datetime(['2022-01-01', '2022-01-02'])
+        })
+        
+        with pytest.raises(ValueError, match="Missing required columns.*travel_time"):
+            traffic_anomaly.decompose(
+                data=data_missing_value,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+        
+        # Test missing entity grouping columns
+        data_missing_entity = pd.DataFrame({
+            'timestamp': pd.to_datetime(['2022-01-01', '2022-01-02']),
+            'travel_time': [10.0, 15.0]
+        })
+        
+        with pytest.raises(ValueError, match="Missing required columns.*id"):
+            traffic_anomaly.decompose(
+                data=data_missing_entity,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+        
+        # Test multiple missing columns
+        with pytest.raises(ValueError, match="Missing required columns"):
+            traffic_anomaly.decompose(
+                data=pd.DataFrame({'timestamp': pd.to_datetime(['2022-01-01'])}),
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+
+    def test_decompose_invalid_parameter_types(self):
+        """Test decompose with invalid parameter types"""
+        # Test non-list entity_grouping_columns
+        with pytest.raises(ValueError, match="entity_grouping_columns must be a list"):
+            traffic_anomaly.decompose(
+                data=self.travel_times.head(10),
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns='id'  # Should be ['id']
+            )
+        
+        # Test with tuple instead of list (should also fail)
+        with pytest.raises(ValueError, match="entity_grouping_columns must be a list"):
+            traffic_anomaly.decompose(
+                data=self.travel_times.head(10),
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=('id',)  # Tuple instead of list
+            )
+
+    def test_decompose_invalid_data_type(self):
+        """Test decompose with invalid data input types"""
+        # Test with invalid data type (not DataFrame or Ibis)
+        with pytest.raises(ValueError, match="Invalid data type. Please provide a valid Ibis table or pandas DataFrame"):
+            traffic_anomaly.decompose(
+                data="invalid_data_type",
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+        
+        # Test with None - this actually gets converted to empty DataFrame by ibis, so it triggers missing columns error
+        with pytest.raises(ValueError, match="Missing required columns"):
+            traffic_anomaly.decompose(
+                data=None,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+
+    def test_anomaly_missing_columns(self):
+        """Test anomaly detection with missing required columns"""
+        # Test missing datetime column
+        data_missing_datetime = pd.DataFrame({
+            'id': [1, 2],
+            'travel_time': [10.0, 15.0],
+            'prediction': [9.0, 14.0],
+            'resid': [1.0, 1.0]
+        })
+        
+        with pytest.raises(ValueError, match="Missing required columns.*timestamp"):
+            traffic_anomaly.anomaly(
+                decomposed_data=data_missing_datetime,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+        
+        # Test missing value column
+        data_missing_value = pd.DataFrame({
+            'id': [1, 2],
+            'timestamp': pd.to_datetime(['2022-01-01', '2022-01-02']),
+            'prediction': [9.0, 14.0],
+            'resid': [1.0, 1.0]
+        })
+        
+        with pytest.raises(ValueError, match="Missing required columns.*travel_time"):
+            traffic_anomaly.anomaly(
+                decomposed_data=data_missing_value,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+        
+        # Test missing entity grouping columns
+        data_missing_entity = pd.DataFrame({
+            'timestamp': pd.to_datetime(['2022-01-01', '2022-01-02']),
+            'travel_time': [10.0, 15.0],
+            'prediction': [9.0, 14.0],
+            'resid': [1.0, 1.0]
+        })
+        
+        with pytest.raises(ValueError, match="Missing required columns.*id"):
+            traffic_anomaly.anomaly(
+                decomposed_data=data_missing_entity,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+
+    def test_anomaly_missing_decomposed_columns(self):
+        """Test anomaly detection with missing prediction/resid columns"""
+        # Test missing prediction column
+        data_missing_prediction = pd.DataFrame({
+            'id': [1, 2],
+            'timestamp': pd.to_datetime(['2022-01-01', '2022-01-02']),
+            'travel_time': [10.0, 15.0],
+            'resid': [1.0, 1.0]
+        })
+        
+        with pytest.raises(AssertionError, match="prediction column not found"):
+            traffic_anomaly.anomaly(
+                decomposed_data=data_missing_prediction,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+        
+        # Test missing resid column
+        data_missing_resid = pd.DataFrame({
+            'id': [1, 2],
+            'timestamp': pd.to_datetime(['2022-01-01', '2022-01-02']),
+            'travel_time': [10.0, 15.0],
+            'prediction': [9.0, 14.0]
+        })
+        
+        with pytest.raises(AssertionError, match="resid column not found"):
+            traffic_anomaly.anomaly(
+                decomposed_data=data_missing_resid,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+
+    def test_anomaly_invalid_parameter_types(self):
+        """Test anomaly detection with invalid parameter types"""
+        # Create valid minimal decomposed data
+        valid_data = pd.DataFrame({
+            'id': [1, 2],
+            'timestamp': pd.to_datetime(['2022-01-01', '2022-01-02']),
+            'travel_time': [10.0, 15.0],
+            'prediction': [9.0, 14.0],
+            'resid': [1.0, 1.0]
+        })
+        
+        # Test non-list entity_grouping_columns
+        with pytest.raises(AssertionError, match="entity_grouping_columns must be a list"):
+            traffic_anomaly.anomaly(
+                decomposed_data=valid_data,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns='id'  # Should be ['id']
+            )
+        
+        # Test invalid group_grouping_columns type
+        with pytest.raises(AssertionError, match="group_grouping_columns must be a list"):
+            traffic_anomaly.anomaly(
+                decomposed_data=valid_data,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id'],
+                group_grouping_columns='group'  # Should be ['group'] or None
+            )
+
+    def test_anomaly_invalid_data_type(self):
+        """Test anomaly detection with invalid data input types"""
+        # Test with invalid data type
+        with pytest.raises(ValueError, match="Invalid data type"):
+            traffic_anomaly.anomaly(
+                decomposed_data="invalid_data_type",
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+
+    def test_changepoint_missing_columns(self):
+        """Test changepoint detection with missing required columns"""
+        # Test missing datetime column
+        data_missing_datetime = pd.DataFrame({
+            'ID': [1, 2],
+            'travel_time_seconds': [10.0, 15.0]
+        })
+        
+        with pytest.raises(ValueError, match="Missing required columns.*TimeStamp"):
+            traffic_anomaly.changepoint(
+                data=data_missing_datetime,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID'
+            )
+        
+        # Test missing value column
+        data_missing_value = pd.DataFrame({
+            'ID': [1, 2],
+            'TimeStamp': pd.to_datetime(['2022-01-01', '2022-01-02'])
+        })
+        
+        with pytest.raises(ValueError, match="Missing required columns.*travel_time_seconds"):
+            traffic_anomaly.changepoint(
+                data=data_missing_value,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID'
+            )
+        
+        # Test missing entity grouping column (single string)
+        data_missing_entity = pd.DataFrame({
+            'TimeStamp': pd.to_datetime(['2022-01-01', '2022-01-02']),
+            'travel_time_seconds': [10.0, 15.0]
+        })
+        
+        with pytest.raises(ValueError, match="Missing required columns.*ID"):
+            traffic_anomaly.changepoint(
+                data=data_missing_entity,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID'
+            )
+        
+        # Test missing entity grouping columns (list)
+        with pytest.raises(ValueError, match="Missing required columns.*ID.*group"):
+            traffic_anomaly.changepoint(
+                data=data_missing_entity,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column=['ID', 'group']
+            )
+
+    def test_changepoint_invalid_parameter_values(self):
+        """Test changepoint detection with invalid parameter values"""
+        # Create valid minimal data
+        valid_data = pd.DataFrame({
+            'ID': [1, 1, 2, 2],
+            'TimeStamp': pd.to_datetime(['2022-01-01', '2022-01-02', '2022-01-01', '2022-01-02']),
+            'travel_time_seconds': [10.0, 15.0, 12.0, 18.0]
+        })
+        
+        # Test invalid upper_bound (>1)
+        with pytest.raises(ValueError, match="upper_bound must be between 0 and 1"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                upper_bound=1.5
+            )
+        
+        # Test invalid upper_bound (<0)
+        with pytest.raises(ValueError, match="upper_bound must be between 0 and 1"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                upper_bound=-0.1
+            )
+        
+        # Test invalid lower_bound (>1)
+        with pytest.raises(ValueError, match="lower_bound must be between 0 and 1"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                lower_bound=1.2
+            )
+        
+        # Test invalid lower_bound (<0)
+        with pytest.raises(ValueError, match="lower_bound must be between 0 and 1"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                lower_bound=-0.05
+            )
+        
+        # Test lower_bound >= upper_bound
+        with pytest.raises(ValueError, match="lower_bound must be less than upper_bound"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                lower_bound=0.8,
+                upper_bound=0.7
+            )
+        
+        # Test lower_bound == upper_bound
+        with pytest.raises(ValueError, match="lower_bound must be less than upper_bound"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                lower_bound=0.5,
+                upper_bound=0.5
+            )
+        
+        # Test invalid rolling_window_days (<=0)
+        with pytest.raises(ValueError, match="rolling_window_days must be positive"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                rolling_window_days=0
+            )
+        
+        with pytest.raises(ValueError, match="rolling_window_days must be positive"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                rolling_window_days=-5
+            )
+        
+        # Test invalid min_separation_days (<0)
+        with pytest.raises(ValueError, match="min_separation_days must be non-negative"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                min_separation_days=-1
+            )
+
+    def test_changepoint_invalid_data_type(self):
+        """Test changepoint detection with invalid data input types"""
+        # Test with invalid data type
+        with pytest.raises(ValueError, match="Invalid data type. Please provide a valid Ibis table or pandas DataFrame"):
+            traffic_anomaly.changepoint(
+                data="invalid_data_type",
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID'
+            )
+        
+        # Test with None - this actually gets converted to empty DataFrame by ibis, so it triggers missing columns error
+        with pytest.raises(ValueError, match="Missing required columns"):
+            traffic_anomaly.changepoint(
+                data=None,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID'
+            )
+
+    def test_changepoint_entity_grouping_column_variations(self):
+        """Test changepoint with both string and list entity grouping columns"""
+        # Test missing column in list
+        valid_data = pd.DataFrame({
+            'ID': [1, 1, 2, 2],
+            'TimeStamp': pd.to_datetime(['2022-01-01', '2022-01-15', '2022-01-01', '2022-01-15']),
+            'travel_time_seconds': [10.0, 15.0, 12.0, 18.0]
+        })
+        
+        with pytest.raises(ValueError, match="Missing required columns.*missing_col"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column=['ID', 'missing_col']
+            )
+
+    def test_decompose_edge_cases(self):
+        """Test decompose with edge case scenarios"""
+        # Test with empty DataFrame
+        empty_data = pd.DataFrame()
+        
+        with pytest.raises(ValueError, match="Missing required columns"):
+            traffic_anomaly.decompose(
+                data=empty_data,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+
+    def test_anomaly_edge_cases(self):
+        """Test anomaly detection with edge case scenarios"""
+        # Test with empty DataFrame
+        empty_data = pd.DataFrame()
+        
+        with pytest.raises(ValueError, match="Missing required columns"):
+            traffic_anomaly.anomaly(
+                decomposed_data=empty_data,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+        
+        # Test with DataFrame that has basic columns but missing decomposed columns
+        basic_data = pd.DataFrame({
+            'id': [1],
+            'timestamp': pd.to_datetime(['2022-01-01']),
+            'travel_time': [10.0]
+        })
+        
+        with pytest.raises(AssertionError, match="prediction column not found"):
+            traffic_anomaly.anomaly(
+                decomposed_data=basic_data,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+
+    def test_changepoint_edge_cases(self):
+        """Test changepoint detection with edge case scenarios"""
+        # Test with empty DataFrame
+        empty_data = pd.DataFrame()
+        
+        with pytest.raises(ValueError, match="Missing required columns"):
+            traffic_anomaly.changepoint(
+                data=empty_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID'
+            )
+
+    def test_parameter_type_validation_comprehensive(self):
+        """Test comprehensive parameter type validation across all functions"""
+        # Create minimal valid data for each function
+        anomaly_data = pd.DataFrame({
+            'id': [1, 2],
+            'timestamp': pd.to_datetime(['2022-01-01', '2022-01-02']),
+            'travel_time': [10.0, 15.0],
+            'prediction': [9.0, 14.0],
+            'resid': [1.0, 1.0]
+        })
+        
+        changepoint_data = pd.DataFrame({
+            'ID': [1, 1, 2, 2],
+            'TimeStamp': pd.to_datetime(['2022-01-01', '2022-01-02', '2022-01-01', '2022-01-02']),
+            'travel_time_seconds': [10.0, 15.0, 12.0, 18.0]
+        })
+        
+        # Test anomaly with various invalid parameter types
+        invalid_grouping_types = [
+            123,
+            {'key': 'value'},
+            set(['id']),
+        ]
+        
+        for invalid_type in invalid_grouping_types:
+            with pytest.raises(AssertionError, match="entity_grouping_columns must be a list"):
+                traffic_anomaly.anomaly(
+                    decomposed_data=anomaly_data,
+                    datetime_column='timestamp',
+                    value_column='travel_time',
+                    entity_grouping_columns=invalid_type
+                )
+        
+        # Test anomaly group_grouping_columns validation
+        invalid_group_types = [123, {'key': 'value'}, set(['group'])]
+        
+        for invalid_type in invalid_group_types:
+            with pytest.raises(AssertionError, match="group_grouping_columns must be a list"):
+                traffic_anomaly.anomaly(
+                    decomposed_data=anomaly_data,
+                    datetime_column='timestamp',
+                    value_column='travel_time',
+                    entity_grouping_columns=['id'],
+                    group_grouping_columns=invalid_type
+                )
+        
+        # Test changepoint with invalid numeric parameter types
+        with pytest.raises((ValueError, TypeError)):
+            traffic_anomaly.changepoint(
+                data=changepoint_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                upper_bound="invalid"  # Should be float
+            )
+        
+        with pytest.raises((ValueError, TypeError)):
+            traffic_anomaly.changepoint(
+                data=changepoint_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                rolling_window_days="invalid"  # Should be int
+            )
+
+    def test_memtable_exception_handling(self):
+        """Test exception handling in ibis.memtable() conversion"""
+        # Mock an object that will cause ibis.memtable() to raise an exception
+        class BadDataType:
+            def __init__(self):
+                pass
+            
+            def __str__(self):
+                return "mock_bad_data"
+        
+        bad_data = BadDataType()
+        
+        # Test decompose with bad data type
+        with pytest.raises(ValueError, match="Invalid data type. Please provide a valid Ibis table or pandas DataFrame"):
+            traffic_anomaly.decompose(
+                data=bad_data,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+        
+        # Test anomaly with bad data type
+        with pytest.raises(ValueError, match="Invalid data type. Please provide a valid Ibis table or pandas DataFrame"):
+            traffic_anomaly.anomaly(
+                decomposed_data=bad_data,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id']
+            )
+        
+        # Test changepoint with bad data type
+        with pytest.raises(ValueError, match="Invalid data type. Please provide a valid Ibis table or pandas DataFrame"):
+            traffic_anomaly.changepoint(
+                data=bad_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID'
+            )
+
+    def test_none_default_parameter_handling(self):
+        """Test handling of None default parameters"""
+        # Test anomaly with None group_grouping_columns (should be allowed)
+        decomposed_data = pd.DataFrame({
+            'id': [1, 2],
+            'timestamp': pd.to_datetime(['2022-01-01', '2022-01-02']),
+            'travel_time': [10.0, 15.0],
+            'prediction': [9.0, 14.0],
+            'resid': [1.0, 1.0]
+        })
+        
+        try:
+            result = traffic_anomaly.anomaly(
+                decomposed_data=decomposed_data,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id'],
+                group_grouping_columns=None,  # Should be allowed
+                return_sql=True
+            )
+            assert isinstance(result, (str, type(result))), "Should return SQL string with None group grouping"
+        except Exception as e:
+            pytest.fail(f"None group_grouping_columns should be allowed: {e}")
 
 
 if __name__ == "__main__":

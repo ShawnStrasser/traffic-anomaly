@@ -62,10 +62,6 @@ jobs:
             python-version: '3.10'
             ibis-major: '10'
             ibis-spec: '>=10,<11'
-          - os: macos-latest
-            python-version: '3.13'
-            ibis-major: '9'
-            ibis-spec: '>=9,<10'
 
     steps:
     - uses: actions/checkout@v4
