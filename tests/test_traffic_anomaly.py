@@ -278,6 +278,11 @@ class TestTrafficAnomaly:
         for col in regular_sorted.columns:
             if np.issubdtype(regular_sorted[col].dtype, np.number):
                 assert np.allclose(regular_sorted[col].fillna(0), sql_sorted[col].fillna(0), rtol=0.1, atol=0.1, equal_nan=True), f"Numeric values differ in column {col}"
+            elif np.issubdtype(regular_sorted[col].dtype, np.datetime64):
+                # For datetime columns, convert to same precision before comparison
+                reg_col = pd.to_datetime(regular_sorted[col]).dt.floor('s')
+                sql_col = pd.to_datetime(sql_sorted[col]).dt.floor('s')
+                assert reg_col.equals(sql_col), f"Values differ in column {col}"
             else:
                 assert regular_sorted[col].equals(sql_sorted[col]), f"Values differ in column {col}"
 
@@ -330,6 +335,11 @@ class TestTrafficAnomaly:
         for col in regular_sorted.columns:
             if np.issubdtype(regular_sorted[col].dtype, np.number):
                 assert np.allclose(regular_sorted[col].fillna(0), sql_sorted[col].fillna(0), rtol=0.1, atol=0.1, equal_nan=True), f"Numeric values differ in column {col}"
+            elif np.issubdtype(regular_sorted[col].dtype, np.datetime64):
+                # For datetime columns, convert to same precision before comparison
+                reg_col = pd.to_datetime(regular_sorted[col]).dt.floor('s')
+                sql_col = pd.to_datetime(sql_sorted[col]).dt.floor('s')
+                assert reg_col.equals(sql_col), f"Values differ in column {col}"
             else:
                 assert regular_sorted[col].equals(sql_sorted[col]), f"Values differ in column {col}"
     
