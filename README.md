@@ -3,7 +3,7 @@
 <!-- Package Info -->
 [![PyPI](https://img.shields.io/pypi/v/traffic_anomaly)](https://pypi.org/project/traffic_anomaly/)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/traffic_anomaly)](https://pypi.org/project/traffic_anomaly/)
-[![PyPI - Downloads](https://img.shields.io/pypi/dm/traffic_anomaly)](https://pypi.org/project/traffic_anomaly/)
+[![PyPI - Downloads](https://static.pepy.tech/badge/traffic-anomaly)](https://pepy.tech/project/traffic-anomaly)
 
 <!-- Repository Info -->
 [![GitHub License](https://img.shields.io/github/license/ShawnStrasser/traffic-anomaly)](https://github.com/ShawnStrasser/traffic-anomaly/blob/main/LICENSE)
