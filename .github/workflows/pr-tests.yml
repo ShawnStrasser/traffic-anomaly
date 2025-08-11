@@ -18,7 +18,7 @@ jobs:
     name: tests (${{ matrix.os }}, py${{ matrix.python-version }}, ibis ${{ matrix.ibis-major }})
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           # Ubuntu focus (min, mid, max Python; both ibis)
