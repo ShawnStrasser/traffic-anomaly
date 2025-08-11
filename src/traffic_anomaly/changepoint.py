@@ -328,14 +328,17 @@ def changepoint(
         Left_Cost=(10 * (result['Left_Var'] + EPSILON).ln()),
         Right_Cost=(10 * (result['Right_Var'] + EPSILON).ln())
     )
+    
+    # Check window boundaries to ensure we have complete windows
+    window_condition = (
+        (result[datetime_column] >= result['min_ts'] + half_window_interval) &
+        (result[datetime_column] <= result['max_ts'] - half_window_interval)
+    )
+    
     result = result.mutate(
-        score=ibis.cases(
-            (
-                (result[datetime_column] >= result['min_ts'] + half_window_interval) &
-                (result[datetime_column] <= result['max_ts'] - half_window_interval),
-                result['Combined_Cost'] - result['Left_Cost'] - result['Right_Cost']
-            ),
-            else_=None
+        score=window_condition.ifelse(
+            result['Combined_Cost'] - result['Left_Cost'] - result['Right_Cost'],
+            None
         )
     )
 
