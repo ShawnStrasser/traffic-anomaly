@@ -15,53 +15,27 @@ on:
 
 jobs:
   test:
-    name: tests (${{ matrix.os }}, py${{ matrix.python-version }}, ibis ${{ matrix.ibis-major }})
+    name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Ubuntu focus (min, mid, max Python; both ibis)
-          - os: ubuntu-latest
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        exclude:
+          # Reduce matrix size by excluding some combinations
+          - os: windows-latest
+            python-version: '3.11'
+          - os: windows-latest
             python-version: '3.9'
-            ibis-major: '9'
-            ibis-spec: '>=9.5,<10'
-          - os: ubuntu-latest
+          - os: windows-latest
+            python-version: '3.12'
+          - os: macos-latest
+            python-version: '3.9'
+          - os: macos-latest
+            python-version: '3.11'
+          - os: macos-latest
             python-version: '3.13'
-            ibis-major: '10'
-            ibis-spec: '>=10,<11'
-          - os: ubuntu-latest
-            python-version: '3.11'
-            ibis-major: '10'
-            ibis-spec: '>=10,<11'
-          - os: ubuntu-latest
-            python-version: '3.11'
-            ibis-major: '9'
-            ibis-spec: '>=9.5,<10'
-
-          # Windows coverage (two distinct Pythons; both ibis)
-          - os: windows-latest
-            python-version: '3.10'
-            ibis-major: '9'
-            ibis-spec: '>=9.5,<10'
-          - os: windows-latest
-            python-version: '3.12'
-            ibis-major: '10'
-            ibis-spec: '>=10,<11'
-          - os: windows-latest
-            python-version: '3.9'
-            ibis-major: '10'
-            ibis-spec: '>=10,<11'
-
-          # macOS coverage (two distinct Pythons; both ibis)
-          - os: macos-latest
-            python-version: '3.12'
-            ibis-major: '9'
-            ibis-spec: '>=9.5,<10'
-          - os: macos-latest
-            python-version: '3.10'
-            ibis-major: '10'
-            ibis-spec: '>=10,<11'
 
     steps:
     - uses: actions/checkout@v4
@@ -74,7 +48,7 @@ jobs:
     - name: Install dependencies
       run: |
         pip install pytest pytest-cov build pandas pyarrow toml
-        pip install "ibis-framework[duckdb]${{ matrix.ibis-spec }}"
+        pip install "ibis-framework[duckdb]>=10,<11"
         # Install the package without deps so the pinned ibis stays in place
         pip install --no-deps .
 
@@ -95,7 +69,7 @@ jobs:
     - name: Upload pytest results
       uses: actions/upload-artifact@v4
       with:
-        name: pytest-results-${{ matrix.os }}-py${{ matrix.python-version }}-ibis${{ matrix.ibis-major }}
+        name: pytest-results-${{ matrix.os }}-py${{ matrix.python-version }}
         path: pytest-results.xml
       if: ${{ always() }}
 
