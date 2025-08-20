@@ -109,6 +109,9 @@ class TestTrafficAnomaly:
             entity_grouping_columns=['id'],
             entity_threshold=3.5
         )
+        # Drop 'resid' for comparison with precalculated results
+        if 'resid' in anomaly.columns:
+            anomaly = anomaly.drop(columns=['resid'])
         
         # Load precalculated results
         expected_path = os.path.join(self.precalculated_dir, 'test_anomaly.parquet')
@@ -144,6 +147,9 @@ class TestTrafficAnomaly:
             group_grouping_columns=['group'],
             MAD=True
         )
+        # Drop 'resid' for comparison
+        if 'resid' in anomaly2.columns:
+            anomaly2 = anomaly2.drop(columns=['resid'])
         
         # Load precalculated results
         expected_path = os.path.join(self.precalculated_dir, 'test_anomaly2.parquet')
@@ -175,6 +181,9 @@ class TestTrafficAnomaly:
             log_adjust_negative=True,
             return_sql=False
         )
+        # Drop 'resid' for comparison
+        if 'resid' in anomaly3.columns:
+            anomaly3 = anomaly3.drop(columns=['resid'])
         
         # Load precalculated results
         expected_path = os.path.join(self.precalculated_dir, 'test_anomaly3.parquet')
@@ -182,12 +191,77 @@ class TestTrafficAnomaly:
         
         # Compare results
         self._compare_dataframes(anomaly3, expected, "anomaly_with_geh")
+
+    def test_anomaly_with_connectivity_originated(self):
+        """Test anomaly with connectivity_table (originated anomalies) against precalculated results"""
+        # Decompose travel times using the same parameters as other tests for consistency
+        decomp = traffic_anomaly.decompose(
+            data=self.travel_times,
+            datetime_column='timestamp',
+            value_column='travel_time',
+            entity_grouping_columns=['id', 'group'],
+            freq_minutes=60,
+            rolling_window_days=7,
+            drop_days=7,
+            min_rolling_window_samples=56,
+            min_time_of_day_samples=7,
+            drop_extras=False,
+            return_sql=False
+        )
+
+        # Load connectivity table from sample data
+        df_connectivity = sample_data.connectivity
+
+        # Apply anomaly detection with connectivity to compute originated anomalies
+        anomaly_originated = traffic_anomaly.anomaly(
+            decomposed_data=decomp,
+            datetime_column='timestamp',
+            value_column='travel_time',
+            entity_grouping_columns=['id'],
+            entity_threshold=3.5,
+            group_grouping_columns=['group'],
+            MAD=True,
+            connectivity_table=df_connectivity
+        )
+        # Align with precalculated output by dropping internal 'resid' column if present
+        if 'resid' in anomaly_originated.columns:
+            anomaly_originated = anomaly_originated.drop(columns=['resid'])
+
+        # Load precalculated results
+        expected_path = os.path.join(self.precalculated_dir, 'test_anomaly_originated.parquet')
+        expected = pd.read_parquet(expected_path)
+
+        # Compare results
+        self._compare_dataframes(anomaly_originated, expected, "anomaly_with_connectivity_originated")
+
+    def test_anomaly_connectivity_requires_single_entity(self):
+        """Connectivity analysis should enforce a single entity grouping column"""
+        # Minimal decomposition for speed
+        decomp_small = traffic_anomaly.decompose(
+            data=self.travel_times.head(50),
+            datetime_column='timestamp',
+            value_column='travel_time',
+            entity_grouping_columns=['id', 'group'],
+            rolling_window_enable=False,
+            drop_extras=False
+        )
+
+        df_connectivity = sample_data.connectivity
+
+        # Passing more than one entity grouping column should raise a ValueError when connectivity is used
+        with pytest.raises(ValueError, match="Connectivity analysis is currently only supported for a single entity grouping column"):
+            traffic_anomaly.anomaly(
+                decomposed_data=decomp_small,
+                datetime_column='timestamp',
+                value_column='travel_time',
+                entity_grouping_columns=['id', 'group'],
+                connectivity_table=df_connectivity
+            )
     
     def test_changepoint_robust(self):
         """Test changepoint detection with robust=True against precalculated results"""
         # Load sample changepoint input data
-        sample_data_path = os.path.join(self.project_root, 'src', 'traffic_anomaly', 'data', 'sample_changepoint_input.parquet')
-        df = pd.read_parquet(sample_data_path)
+        df = sample_data.changepoints_input
         
         # Calculate changepoints with robust=True
         changepoints_robust = traffic_anomaly.changepoint(
@@ -209,8 +283,7 @@ class TestTrafficAnomaly:
     def test_changepoint_standard(self):
         """Test changepoint detection with robust=False against precalculated results"""
         # Load sample changepoint input data
-        sample_data_path = os.path.join(self.project_root, 'src', 'traffic_anomaly', 'data', 'sample_changepoint_input.parquet')
-        df = pd.read_parquet(sample_data_path)
+        df = sample_data.changepoints_input
         
         # Calculate changepoints with robust=False
         changepoints_standard = traffic_anomaly.changepoint(
@@ -518,6 +591,10 @@ class TestTrafficAnomaly:
             GEH=True,
             entity_threshold=6.0
         )
+        if 'resid' in geh_result.columns:
+            geh_compare = geh_result.drop(columns=['resid'])
+        else:
+            geh_compare = geh_result
         
         # Z-score based detection
         zscore_result = traffic_anomaly.anomaly(
@@ -528,21 +605,25 @@ class TestTrafficAnomaly:
             GEH=False,
             entity_threshold=3.0
         )
+        if 'resid' in zscore_result.columns:
+            zscore_compare = zscore_result.drop(columns=['resid'])
+        else:
+            zscore_compare = zscore_result
         
         # Create precalculated datasets
         geh_expected_path = os.path.join(self.precalculated_dir, 'test_geh_anomaly_small.parquet')
         zscore_expected_path = os.path.join(self.precalculated_dir, 'test_zscore_anomaly_small.parquet')
         
         if not os.path.exists(geh_expected_path):
-            geh_result.to_parquet(geh_expected_path)
+            geh_compare.to_parquet(geh_expected_path)
         if not os.path.exists(zscore_expected_path):
-            zscore_result.to_parquet(zscore_expected_path)
+            zscore_compare.to_parquet(zscore_expected_path)
         
         expected_geh = pd.read_parquet(geh_expected_path)
         expected_zscore = pd.read_parquet(zscore_expected_path)
         
-        self._compare_dataframes(geh_result, expected_geh, "geh_anomaly_detection_small")
-        self._compare_dataframes(zscore_result, expected_zscore, "zscore_anomaly_detection_small")
+        self._compare_dataframes(geh_compare, expected_geh, "geh_anomaly_detection_small")
+        self._compare_dataframes(zscore_compare, expected_zscore, "zscore_anomaly_detection_small")
         
         # Verify they detect different anomalies (GEH is magnitude-aware)
         geh_anomalies = geh_result['anomaly'].sum()
@@ -592,14 +673,19 @@ class TestTrafficAnomaly:
             log_adjust_negative=True,
             entity_threshold=6.0
         )
+        # Drop 'resid' for comparison and expected generation
+        if 'resid' in log_adjusted_result.columns:
+            log_adjusted_compare = log_adjusted_result.drop(columns=['resid'])
+        else:
+            log_adjusted_compare = log_adjusted_result
         
         # Create precalculated dataset
         log_adjusted_expected_path = os.path.join(self.precalculated_dir, 'test_log_adjusted_small.parquet')
         if not os.path.exists(log_adjusted_expected_path):
-            log_adjusted_result.to_parquet(log_adjusted_expected_path)
+            log_adjusted_compare.to_parquet(log_adjusted_expected_path)
         
         expected_log_adjusted = pd.read_parquet(log_adjusted_expected_path)
-        self._compare_dataframes(log_adjusted_result, expected_log_adjusted, "log_adjusted_anomalies_small")
+        self._compare_dataframes(log_adjusted_compare, expected_log_adjusted, "log_adjusted_anomalies_small")
         
         # Log adjustment should generally detect more anomalies for low-value scenarios
         normal_count = normal_result['anomaly'].sum()

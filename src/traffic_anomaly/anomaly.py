@@ -33,6 +33,7 @@ def anomaly(
     GEH: bool = False,
     MAD: bool = False,
     log_adjust_negative: bool = False,
+    connectivity_table: Optional[Union[ibis.Expr, Any]] = None,
     return_sql: bool = False
 ) -> Union[ibis.Expr, Any, str]:  # ibis.Expr, pandas.DataFrame, or str
     """
@@ -49,6 +50,8 @@ def anomaly(
         GEH: Whether to use GEH scores for entity-level anomaly detection.
         MAD: Whether to use Median Absolute Deviation (MAD) for group-level anomaly detection.
         log_adjust_negative: Whether to make negative residuals more extreme for data censored at 0.
+        connectivity_table: Optional table to calculate originated anomalies. 
+                           When provided, only a single entity_grouping_column is supported.
         return_sql: Whether to return the SQL query string instead of the result.
 
     Returns:
@@ -65,10 +68,15 @@ def anomaly(
         - MAD is used to detect anomalies based on the median absolute deviation of residuals within each group.
         - log_adjust_negative is used to make negative residuals more extreme when the data is censored at 0.
         - The function supports both pandas DataFrame and Ibis table expressions as input.
+        - Connectivity analysis (originated_anomaly calculation) is only supported when entity_grouping_columns contains exactly one column.
     """
     # Validate parameter types
     assert isinstance(entity_grouping_columns, list), 'entity_grouping_columns must be a list.'
     assert group_grouping_columns is None or isinstance(group_grouping_columns, list), 'group_grouping_columns must be a list.'
+    
+    # Early validation: if connectivity_table is provided, ensure only one entity grouping column
+    if connectivity_table is not None and len(entity_grouping_columns) != 1:
+        raise ValueError("Connectivity analysis is currently only supported for a single entity grouping column.")
 
     # Check if data is an Ibis table
     if isinstance(decomposed_data, ibis.Expr):
@@ -151,11 +159,72 @@ def anomaly(
                 .mutate(anomaly=(zscore_func(_.resid) > group_threshold) & _.anomaly)
             )
 
-    result = result.drop('resid')
+    if connectivity_table is not None:
+        if isinstance(connectivity_table, ibis.Expr):
+            conn_table = connectivity_table
+        else:
+            try:
+                conn_table = ibis.memtable(connectivity_table)
+            except Exception as e:
+                raise ValueError('Invalid connectivity_table type. Please provide a valid Ibis table or pandas DataFrame.')
+
+        # Validate connectivity table columns
+        entity_col = entity_grouping_columns[0]
+        next_entity_col = f"next_{entity_col}"
+
+        if entity_col not in conn_table.columns or next_entity_col not in conn_table.columns:
+            raise ValueError(f"Connectivity table must contain '{entity_col}' and '{next_entity_col}' columns.")
+
+        # Calculate originated anomaly
+        anomaly_source = result.select(datetime_column, entity_col, 'anomaly')
+
+        # Join with connectivity
+        with_conn = anomaly_source.join(conn_table, entity_col)
+
+        # Prepare next anomaly info
+        next_anomaly_info = anomaly_source.rename(
+            **{next_entity_col: entity_col}
+        ).select(
+            datetime_column,
+            next_entity_col,
+            next_anomaly='anomaly'
+        )
+
+
+        # Join to get next_anomaly
+        merged = with_conn.join(
+            next_anomaly_info,
+            [datetime_column, next_entity_col]
+        )
+
+        # Cast to int for aggregation
+        merged = merged.mutate(next_anomaly=_.next_anomaly.cast('int8'))
+
+        # Get max_next_anomaly
+        max_next_anomaly = merged.group_by(
+            [datetime_column, entity_col]
+        ).agg(
+            max_next_anomaly=_.next_anomaly.max()
+        )
+
+        # Join back to the main result table (left join to preserve all rows)
+        result = result.left_join(
+            max_next_anomaly,
+            [datetime_column, entity_col]
+        ).select(result, 'max_next_anomaly')
+
+        # Fill NA for entities that have no connectivity data
+        # Use 1 so that anomaly > max_next_anomaly becomes False (not originated)
+        result = result.mutate(max_next_anomaly=_.max_next_anomaly.fill_null(1))
+
+        # Calculate originated_anomaly
+        result = result.mutate(
+            originated_anomaly=(_.anomaly.cast('int8') > _.max_next_anomaly)
+        ).drop('max_next_anomaly')
 
     if return_sql:
         return ibis.to_sql(result)
     elif isinstance(decomposed_data, ibis.Expr):
         return result  # Return Ibis expression directly if input was Ibis
     else:
-        return result.execute()  # Convert to pandas (or similar) only for non-Ibis inputs
+        return result.execute()  # Convert to pandas for non-Ibis input

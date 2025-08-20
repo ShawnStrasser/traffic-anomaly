@@ -14,20 +14,22 @@
 [![Unit Tests](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml/badge.svg)](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml)
 [![codecov](https://codecov.io/gh/ShawnStrasser/traffic-anomaly/badge.svg)](https://codecov.io/gh/ShawnStrasser/traffic-anomaly)
 
-`traffic-anomaly` is a production ready Python package for robust decomposition, anomaly detection, and change point detection on multiple time series at once. It uses Ibis to integrate with any SQL backend in a production pipeline, or run locally with the included DuckDB backend.
+`traffic-anomaly` is a production-ready Python package for robust decomposition, anomaly detection, and change point detection across multi-entity time series. It uses Ibis to integrate with any SQL backend or run locally with the included DuckDB backend.
 
 **Tested on:** Windows, macOS, and Ubuntu with Python 3.9-3.13
 
-Designed for real world messy traffic data (volumes, travel times), `traffic-anomaly` uses medians to decompose time series into trend, daily, weekly, and residual components. Anomalies are then classified using Z-score or GEH statistics, and change points identify structural shifts in the data. Median Absolute Deviation may be used for further robustness. Missing data are handled, and time periods without sufficient data can be thrown out. Try it out, sample data included! [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1BvMvgheWO3QlB6iSRLhromebwtYjyl4O?usp=sharing)
+Designed for real-world traffic data (volumes, travel times), `traffic-anomaly` uses medians to decompose series into trend, daily, weekly, and residual components. Anomalies are then classified via Z-score or GEH statistics and change points highlight structural shifts. The package handles missing data and can drop time periods with insufficient observations. Sample data included, try it in Google Colab for detailed examples and explanations. [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1ktJfanOpRJ8jelc7w4nSDizj7SGwhScr?usp=sharing)
 
 
 
-# Installation & Usage
+## Installation
 
 ```bash
-pip install traffic_anomaly
+pip install traffic-anomaly
 ```
-    
+
+## Usage
+
 ```python
 from traffic_anomaly import *
 from traffic_anomaly import sample_data
@@ -46,7 +48,7 @@ decomp = decompose(
     min_rolling_window_samples=56, # Minimum number of samples in the rolling window, set to 0 to disable.
     min_time_of_day_samples=7, # Minimum number of samples for each time of day (like 2:00pm), set to 0 to disable
     drop_extras=False, # lets keep seasonal/trend for visualization below
-    to_sql=False # Return SQL queries instead of Pandas DataFrames for running on SQL backends
+    return_sql=False # Return SQL queries instead of Pandas DataFrames for running on SQL backends
 )
 decomp.head(3)
 ```
@@ -60,43 +62,57 @@ Here's a plot showing what it looks like to decompose a time series. The sum of 
 
 ![Example](example_plot.png)
 
-```python
-# Apply anomaly detection
-anomaly = traffic_anomaly.anomaly(
-    decomposed_data=decomp, # Decomposed time series as a Pandas DataFrame or Ibis Table
-    datetime_column='timestamp',
-    value_column='travel_time',
-    entity_grouping_columns=['id'],
-    entity_threshold=3.5 # Threshold for entity-level anomaly detection (z-score or GEH statistic)
-)
-anomaly.head(3)
-```
-| id         | timestamp           | travel_time | group          | prediction | anomaly |
-|------------|----------------------|-------------|----------------|------------|---------|
-| 448838575  | 2022-09-09 06:00:00  | 19.3575     | SE SUNNYSIDE RD| 16.926249  | False   |
-| 448838575  | 2022-09-09 07:00:00  | 22.5200     | SE SUNNYSIDE RD| 20.826252  | False   |
-| 448838575  | 2022-09-09 08:00:00  | 23.0350     | SE SUNNYSIDE RD| 22.712502  | False   |
-
-The image below is showing an example application on actual traffic counts. Note that this package does not produce plots.
+The image below shows an example application on traffic counts (package does not produce plots).
 
 ![ExampleAnomaly](anomaly1.png)
 
-# Changepoint Detection
+## Point Source (Originated) Anomaly Detection
 
-`traffic_anomaly` includes robust changepoint detection that identifies significant changes, such as when traffic patterns shift due to construction, equipment failure, or events like school starting up in the Fall. Changepoints represent moments when the underlying statistical properties of the data change. This functionality is meant for detecting long term / persistent changes, whereas anomaly detection is for short term / transient changes.
+In road networks, an anomaly may be caused by downstream road segment/entity anomalies. To separate downstream-caused anomalies from locally-originated ones, pass a network connectivity table to `anomaly()` via `connectivity_table`. When provided, the output includes an additional boolean column `originated_anomaly` that indicates whether a detected anomaly is a point source (or originated) anomaly.
+
+Requirements
+- Use exactly one entity grouping column for `anomaly()` (e.g., `entity_grouping_columns=['id']`).
+- The connectivity table must contain the entity column and a downstream reference named `next_<entity>` (for `id`, this must be `next_id`).
+- The connectivity table maps each entity to its downstream neighbor(s). In other words, it lists all the roads that vehicles may turn onto from a given road segment.
+
+Example
+```python
+
+# Decompose as usual (shown above)
+
+# Load connectivity (must have columns like: 'id', 'next_id')
+connectivity = sample_data.connectivity
+
+# Detect anomalies with group context and originated-anomaly flag
+anomaly_originated = anomaly(
+    decomposed_data=decomp,
+    datetime_column='timestamp',
+    value_column='travel_time',
+    entity_grouping_columns=['id'],    # exactly one entity column required
+    group_grouping_columns=['group'],  # optional: add group-level context
+    entity_threshold=3.5,
+    connectivity_table=connectivity,   # enables originated_anomaly
+)
+
+# Result will now include column 'originated_anomaly'
+```
+
+## Changepoint Detection
+
+`traffic-anomaly` includes robust changepoint detection that pinpoints when traffic patterns shift due to construction, equipment failure, or events like school starting up in the Fall. Changepoints represent moments when the underlying statistical properties of the data change. This functionality is meant for detecting long term / persistent changes, whereas anomaly detection is for short term / transient changes.
 
 ```python
 # Load changepoint sample data  
 changepoint_data = sample_data.changepoints_input
 
 # Apply change point detection
-changepoints = traffic_anomaly.changepoint(
+changepoints = changepoint(
     data=changepoint_data,  # Pandas DataFrame or Ibis Table
     value_column='travel_time_seconds',
     entity_grouping_column='ID',
     datetime_column='TimeStamp',
     rolling_window_days=14,  # Size of analysis window
-    robust=True,  # Use robust (Winsorized) variance for better outlier handling
+    robust=True,  # Use robust (Winsorized) variance for better outlier handling, but computation is much slower
     score_threshold=5,  # Threshold for change point detection (lower = more sensitive)
     min_separation_days=3  # Minimum days between detected change points
 )
@@ -113,33 +129,28 @@ The image below shows an example of changepoint detection on traffic data, highl
 
 ![ExampleChangepoint](changepoint.png)
 
-The change point detection algorithm:
-- Uses variance-based scoring to identify periods where data patterns shift
-- Can operate in robust mode (recommended) which uses Winsorized variance for better handling of outliers
-- Provides before/after averages to quantify the magnitude and direction of changes
-- Filters results to local peaks with minimum separation to avoid detecting noise
-
-## Parameters
-
+Parameters
 - `robust=True`: Uses Winsorized variance (clips extreme values) for more stable detection
 - `score_threshold`: Higher values detect fewer, more significant change points
 - `rolling_window_days`: Size of the analysis window (split between before/after periods)
 - `min_separation_days`: Prevents detecting multiple change points too close together
 
-# Considerations
+## Considerations
 
 The seasonal components are not allowed to change over time, therefore, it is important to limit the number of weeks included in the model, especially if there is yearly seasonality (and there is). The recommended use for application over a long date range is to run the model incrementally over a rolling window of about 6 weeks.
 
 Because traffic data anomalies usually skew higher, forecasts made by this model are systemically low because in a right tailed distribution the median will be lower than the mean. This is by design, as the model is meant primarily for anomaly detection and not forecasting.
 
-# Notes On Anomaly Detection
+## Notes on Anomaly Detection
 
 `traffic_anomaly` can classify two separate types of anomalies:
 
 1. Entity-Level Anomalies are detected for individual entities based on their own historical patterns, without considering the group context.
 2. Group-Level Anomalies are detected for entities when compared to the behavior of other entities within the same group. Group-level anomalies are more rare because in order to be considered for classification as a group-level anomaly, a time period must also have been classified as an entity-level anomaly.
 
-Why is that needed? Well, say you're data is vehicle travel times within a city and there is a snow storm. Travel times across the city drop, and if you're looking at roadway segments in isolation, everything is an anomaly. That's nice, but what if you're only interested in things that are broken? That's where group-level anomalies come in. They are more rare, but they are more likely to be actionable. Probably not much you can do about that snow storm...
+Why is that needed? Imagine a snow storm: travel times across a city change together. If you only look at road segments in isolation, everything looks anomalous. Group-level anomalies are rarer and more actionable (e.g., indicative of faults) because they highlight entities that deviate from their peers.
 
-# Future Plans/Support
+ 
+
+## Future Plans / Support
 Potentially support Holidays and add a yearly component. Additional changes are not likely unless there is a specific need. Please open an issue if you have a feature request or find a bug.
