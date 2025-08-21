@@ -171,133 +171,98 @@ def changepoint(
             combined_upper=_[value_column].quantile(upper_bound).over(combined_window)
         )
 
-        # Step 3: Calculate winsorized variances using joins
+        # Step 3: Calculate winsorized variances using a single bounded join and conditional aggregation
         center = table_with_quantiles.alias('center')
         neighbor = table_with_quantiles.alias('neighbor')
 
-        # Left variance
-        join_conditions_left = [
-            neighbor[datetime_column] >= (center[datetime_column] - ibis.interval(days=rolling_window_days // 2)),
-            neighbor[datetime_column] < center[datetime_column]
+        half_interval = ibis.interval(days=rolling_window_days // 2)
+        join_conditions = [
+            neighbor[datetime_column] >= (center[datetime_column] - half_interval),
+            neighbor[datetime_column] <= (center[datetime_column] + half_interval - INTERVAL_EPSILON)
         ]
-        # Add grouping column conditions
         for col in grouping_columns:
-            join_conditions_left.append(center[col] == neighbor[col])
-            
-        left_pairs = center.join(
-            neighbor,
-            join_conditions_left
-        ).select(
+            join_conditions.append(center[col] == neighbor[col])
+
+        pairs = center.join(neighbor, join_conditions).select(
             center_row=center['row_num'],
             center_date=center[datetime_column],
             **{f'center_{col}': center[col] for col in grouping_columns},
-            center_lower=center['left_lower'],
-            center_upper=center['left_upper'],
-            neighbor_value=neighbor[value_column]
-        )
-        left_variance = left_pairs.mutate(
-            clipped_neighbor_value=left_pairs['neighbor_value'].clip(left_pairs['center_lower'], left_pairs['center_upper'])
-        ).group_by(['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]).aggregate(
-            Left_Var=_['clipped_neighbor_value'].var()
-        )
-
-        # Right variance
-        join_conditions_right = [
-            neighbor[datetime_column] > center[datetime_column],
-            neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON)
-        ]
-        # Add grouping column conditions
-        for col in grouping_columns:
-            join_conditions_right.append(center[col] == neighbor[col])
-            
-        right_pairs = center.join(
-            neighbor,
-            join_conditions_right
-        ).select(
-            center_row=center['row_num'],
-            center_date=center[datetime_column],
-            **{f'center_{col}': center[col] for col in grouping_columns},
-            center_lower=center['right_lower'],
-            center_upper=center['right_upper'],
-            neighbor_value=neighbor[value_column]
-        )
-        right_variance = right_pairs.mutate(
-            clipped_neighbor_value=right_pairs['neighbor_value'].clip(right_pairs['center_lower'], right_pairs['center_upper'])
-        ).group_by(['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]).aggregate(
-            Right_Var=_['clipped_neighbor_value'].var()
+            neighbor_date=neighbor[datetime_column],
+            neighbor_value=neighbor[value_column],
+            left_lower=center['left_lower'],
+            left_upper=center['left_upper'],
+            right_lower=center['right_lower'],
+            right_upper=center['right_upper'],
+            combined_lower=center['combined_lower'],
+            combined_upper=center['combined_upper']
         )
 
-        # Combined variance
-        join_conditions_combined = [
-            neighbor[datetime_column] >= (center[datetime_column] - ibis.interval(days=rolling_window_days // 2)),
-            neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON),
-            neighbor[datetime_column] != center[datetime_column]
-        ]
-        # Add grouping column conditions
-        for col in grouping_columns:
-            join_conditions_combined.append(center[col] == neighbor[col])
-            
-        combined_pairs = center.join(
-            neighbor,
-            join_conditions_combined
-        ).select(
-            center_row=center['row_num'],
-            center_date=center[datetime_column],
-            **{f'center_{col}': center[col] for col in grouping_columns},
-            center_lower=center['combined_lower'],
-            center_upper=center['combined_upper'],
-            neighbor_value=neighbor[value_column]
-        )
-        combined_variance = combined_pairs.mutate(
-            clipped_neighbor_value=combined_pairs['neighbor_value'].clip(combined_pairs['center_lower'], combined_pairs['center_upper'])
-        ).group_by(['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]).aggregate(
-            Combined_Var=_['clipped_neighbor_value'].var()
+        # Membership flags within the single joined range
+        in_left = pairs['neighbor_date'] < pairs['center_date']
+        in_right = pairs['neighbor_date'] > pairs['center_date']
+        in_combined = pairs['neighbor_date'] != pairs['center_date']
+
+        # Clipped values relative to center bounds
+        clipped_left = pairs['neighbor_value'].clip(pairs['left_lower'], pairs['left_upper'])
+        clipped_right = pairs['neighbor_value'].clip(pairs['right_lower'], pairs['right_upper'])
+        clipped_combined = pairs['neighbor_value'].clip(pairs['combined_lower'], pairs['combined_upper'])
+
+        # Helper masks as ints
+        one_if_left = in_left.ifelse(1, 0)
+        one_if_right = in_right.ifelse(1, 0)
+        one_if_combined = in_combined.ifelse(1, 0)
+
+        aggregated = (
+            pairs.group_by(['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns])
+            .aggregate(
+                # Counts
+                left_count=one_if_left.sum(),
+                right_count=one_if_right.sum(),
+                combined_count=one_if_combined.sum(),
+                # Sums
+                left_sum=in_left.ifelse(clipped_left, 0).sum(),
+                right_sum=in_right.ifelse(clipped_right, 0).sum(),
+                combined_sum=in_combined.ifelse(clipped_combined, 0).sum(),
+                # Sum of squares
+                left_sumsq=in_left.ifelse(clipped_left * clipped_left, 0).sum(),
+                right_sumsq=in_right.ifelse(clipped_right * clipped_right, 0).sum(),
+                combined_sumsq=in_combined.ifelse(clipped_combined * clipped_combined, 0).sum(),
+            )
         )
 
-        # Step 4: Join all variance results back
+        # Compute sample variances from aggregated moments
+        left_count = aggregated['left_count']
+        right_count = aggregated['right_count']
+        combined_count = aggregated['combined_count']
+
+        left_denom_mean = (left_count > 0).ifelse(left_count, 1)
+        right_denom_mean = (right_count > 0).ifelse(right_count, 1)
+        combined_denom_mean = (combined_count > 0).ifelse(combined_count, 1)
+
+        left_mean = aggregated['left_sum'] / left_denom_mean
+        right_mean = aggregated['right_sum'] / right_denom_mean
+        combined_mean = aggregated['combined_sum'] / combined_denom_mean
+
+        left_var_expr = (aggregated['left_sumsq'] - left_mean * left_mean * left_count) / (left_count - 1)
+        right_var_expr = (aggregated['right_sumsq'] - right_mean * right_mean * right_count) / (right_count - 1)
+        combined_var_expr = (aggregated['combined_sumsq'] - combined_mean * combined_mean * combined_count) / (combined_count - 1)
+
+        aggregated = aggregated.mutate(
+            Left_Var=(left_count > 1).ifelse(left_var_expr, None),
+            Right_Var=(right_count > 1).ifelse(right_var_expr, None),
+            Combined_Var=(combined_count > 1).ifelse(combined_var_expr, None),
+        )
+
+        # Step 4: Join variance results back in one go
         base_table = table_with_quantiles.drop(['left_lower', 'left_upper', 'right_lower', 'right_upper', 'combined_lower', 'combined_upper'])
-
-        # Join with left_variance
-        left_join_conditions = [
-            base_table['row_num'] == left_variance['center_row'],
-            base_table[datetime_column] == left_variance['center_date']
+        join_back_conditions = [
+            base_table['row_num'] == aggregated['center_row'],
+            base_table[datetime_column] == aggregated['center_date'],
         ]
         for col in grouping_columns:
-            left_join_conditions.append(base_table[col] == left_variance[f'center_{col}'])
-            
-        result = base_table.join(
-            left_variance,
-            left_join_conditions,
-            how='left'
-        ).select(base_table, 'Left_Var')
+            join_back_conditions.append(base_table[col] == aggregated[f'center_{col}'])
 
-        # Join with right_variance
-        right_join_conditions = [
-            result['row_num'] == right_variance['center_row'],
-            result[datetime_column] == right_variance['center_date']
-        ]
-        for col in grouping_columns:
-            right_join_conditions.append(result[col] == right_variance[f'center_{col}'])
-            
-        result = result.join(
-            right_variance,
-            right_join_conditions,
-            how='left'
-        ).select(result, 'Right_Var')
-
-        # Join with combined_variance
-        combined_join_conditions = [
-            result['row_num'] == combined_variance['center_row'],
-            result[datetime_column] == combined_variance['center_date']
-        ]
-        for col in grouping_columns:
-            combined_join_conditions.append(result[col] == combined_variance[f'center_{col}'])
-            
-        result = result.join(
-            combined_variance,
-            combined_join_conditions,
-            how='left'
-        ).select(result, 'Combined_Var')
+        result = base_table.join(aggregated, join_back_conditions, how='left').select(base_table, 'Left_Var', 'Right_Var', 'Combined_Var')
 
         # Drop row_num column
         result = result.drop('row_num')
@@ -395,3 +360,4 @@ def changepoint(
         return final_result  # Return Ibis expression directly if input was Ibis
     else:
         return final_result.execute()  # Convert to pandas (or similar) only for non-Ibis inputs
+
