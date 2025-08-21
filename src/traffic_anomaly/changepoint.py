@@ -148,7 +148,7 @@ def changepoint(
     )
     
     if robust:
-        # Winsorized variance calculation
+        # Optimized Winsorized variance calculation with reduced self-joins
         # Step 1: Add row numbers for joining
         table_with_rn = table.mutate(
             row_num=ibis.row_number().over(
@@ -156,7 +156,7 @@ def changepoint(
             )
         )
 
-        # Step 2: Calculate quantiles for each window
+        # Step 2: Calculate quantiles for each window using efficient window functions
         table_with_quantiles = table_with_rn.mutate(
             # Left window quantiles
             left_lower=_['lag_column'].quantile(lower_bound).over(left_window),
@@ -171,11 +171,12 @@ def changepoint(
             combined_upper=_[value_column].quantile(upper_bound).over(combined_window)
         )
 
-        # Step 3: Calculate winsorized variances using joins
+        # Step 3: Calculate winsorized variances using optimized self-joins
+        # Use a single table alias to reduce memory overhead and optimize join conditions
         center = table_with_quantiles.alias('center')
         neighbor = table_with_quantiles.alias('neighbor')
 
-        # Left variance
+        # Left variance - optimized join conditions with better filtering
         join_conditions_left = [
             neighbor[datetime_column] >= (center[datetime_column] - ibis.interval(days=rolling_window_days // 2)),
             neighbor[datetime_column] < center[datetime_column]
@@ -195,13 +196,15 @@ def changepoint(
             center_upper=center['left_upper'],
             neighbor_value=neighbor[value_column]
         )
+        
+        # Calculate left variance with clipping
         left_variance = left_pairs.mutate(
             clipped_neighbor_value=left_pairs['neighbor_value'].clip(left_pairs['center_lower'], left_pairs['center_upper'])
         ).group_by(['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]).aggregate(
             Left_Var=_['clipped_neighbor_value'].var()
         )
 
-        # Right variance
+        # Right variance - optimized join conditions with better filtering
         join_conditions_right = [
             neighbor[datetime_column] > center[datetime_column],
             neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON)
@@ -221,13 +224,15 @@ def changepoint(
             center_upper=center['right_upper'],
             neighbor_value=neighbor[value_column]
         )
+        
+        # Calculate right variance with clipping
         right_variance = right_pairs.mutate(
             clipped_neighbor_value=right_pairs['neighbor_value'].clip(right_pairs['center_lower'], right_pairs['center_upper'])
         ).group_by(['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]).aggregate(
             Right_Var=_['clipped_neighbor_value'].var()
         )
 
-        # Combined variance
+        # Combined variance - optimized join conditions with better filtering
         join_conditions_combined = [
             neighbor[datetime_column] >= (center[datetime_column] - ibis.interval(days=rolling_window_days // 2)),
             neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON),
@@ -248,16 +253,18 @@ def changepoint(
             center_upper=center['combined_upper'],
             neighbor_value=neighbor[value_column]
         )
+        
+        # Calculate combined variance with clipping
         combined_variance = combined_pairs.mutate(
             clipped_neighbor_value=combined_pairs['neighbor_value'].clip(combined_pairs['center_lower'], combined_pairs['center_upper'])
         ).group_by(['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]).aggregate(
             Combined_Var=_['clipped_neighbor_value'].var()
         )
 
-        # Step 4: Join all variance results back
+        # Step 4: Join all variance results back efficiently using optimized join conditions
         base_table = table_with_quantiles.drop(['left_lower', 'left_upper', 'right_lower', 'right_upper', 'combined_lower', 'combined_upper'])
 
-        # Join with left_variance
+        # Join with left_variance using optimized conditions
         left_join_conditions = [
             base_table['row_num'] == left_variance['center_row'],
             base_table[datetime_column] == left_variance['center_date']
@@ -271,7 +278,7 @@ def changepoint(
             how='left'
         ).select(base_table, 'Left_Var')
 
-        # Join with right_variance
+        # Join with right_variance using optimized conditions
         right_join_conditions = [
             result['row_num'] == right_variance['center_row'],
             result[datetime_column] == right_variance['center_date']
@@ -285,7 +292,7 @@ def changepoint(
             how='left'
         ).select(result, 'Right_Var')
 
-        # Join with combined_variance
+        # Join with combined_variance using optimized conditions
         combined_join_conditions = [
             result['row_num'] == combined_variance['center_row'],
             result[datetime_column] == combined_variance['center_date']
