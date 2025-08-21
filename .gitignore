@@ -21,3 +21,6 @@ coverage.xml
 htmlcov/
 
 archive/
+*.ipynb
+*.xlsx
+*.xlsm
