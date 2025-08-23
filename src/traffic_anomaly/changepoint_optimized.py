@@ -171,136 +171,85 @@ def changepoint(
             combined_upper=_[value_column].quantile(upper_bound).over(combined_window)
         )
 
-        # Step 3: Calculate winsorized variances using joins
+        # Step 3: Optimized winsorized variance calculation using a single comprehensive join
+        # Instead of 3 separate joins, we do one join and compute all variances together
         center = table_with_quantiles.alias('center')
         neighbor = table_with_quantiles.alias('neighbor')
 
-        # Left variance
-        join_conditions_left = [
+        # Single join for all window relationships
+        join_conditions_all = [
             neighbor[datetime_column] >= (center[datetime_column] - ibis.interval(days=rolling_window_days // 2)),
-            neighbor[datetime_column] < center[datetime_column]
-        ]
-        # Add grouping column conditions
-        for col in grouping_columns:
-            join_conditions_left.append(center[col] == neighbor[col])
-            
-        left_pairs = center.join(
-            neighbor,
-            join_conditions_left
-        ).select(
-            center_row=center['row_num'],
-            center_date=center[datetime_column],
-            **{f'center_{col}': center[col] for col in grouping_columns},
-            center_lower=center['left_lower'],
-            center_upper=center['left_upper'],
-            neighbor_value=neighbor[value_column]
-        )
-        left_variance = left_pairs.mutate(
-            clipped_neighbor_value=left_pairs['neighbor_value'].clip(left_pairs['center_lower'], left_pairs['center_upper'])
-        ).group_by(['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]).aggregate(
-            Left_Var=_['clipped_neighbor_value'].var()
-        )
-
-        # Right variance
-        join_conditions_right = [
-            neighbor[datetime_column] > center[datetime_column],
             neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON)
         ]
         # Add grouping column conditions
         for col in grouping_columns:
-            join_conditions_right.append(center[col] == neighbor[col])
+            join_conditions_all.append(center[col] == neighbor[col])
             
-        right_pairs = center.join(
+        all_pairs = center.join(
             neighbor,
-            join_conditions_right
+            join_conditions_all
         ).select(
             center_row=center['row_num'],
             center_date=center[datetime_column],
+            neighbor_date=neighbor[datetime_column],
             **{f'center_{col}': center[col] for col in grouping_columns},
-            center_lower=center['right_lower'],
-            center_upper=center['right_upper'],
+            # All quantiles needed for clipping
+            left_lower=center['left_lower'],
+            left_upper=center['left_upper'],
+            right_lower=center['right_lower'],
+            right_upper=center['right_upper'],
+            combined_lower=center['combined_lower'],
+            combined_upper=center['combined_upper'],
             neighbor_value=neighbor[value_column]
+        ).mutate(
+            # Determine which window each neighbor belongs to
+            is_left=_['neighbor_date'] < _['center_date'],
+            is_right=_['neighbor_date'] > _['center_date'],
+            is_combined=_['neighbor_date'] != _['center_date']
+        ).mutate(
+            # Clip values for each window type using the new ibis.cases() function
+            left_clipped=ibis.cases(
+                (_['is_left'], _['neighbor_value'].clip(_['left_lower'], _['left_upper'])),
+                else_=None
+            ),
+            right_clipped=ibis.cases(
+                (_['is_right'], _['neighbor_value'].clip(_['right_lower'], _['right_upper'])),
+                else_=None
+            ),
+            combined_clipped=ibis.cases(
+                (_['is_combined'], _['neighbor_value'].clip(_['combined_lower'], _['combined_upper'])),
+                else_=None
+            )
         )
-        right_variance = right_pairs.mutate(
-            clipped_neighbor_value=right_pairs['neighbor_value'].clip(right_pairs['center_lower'], right_pairs['center_upper'])
-        ).group_by(['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]).aggregate(
-            Right_Var=_['clipped_neighbor_value'].var()
+        
+        # Aggregate variances for all windows in one operation
+        all_variances = all_pairs.group_by(
+            ['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]
+        ).aggregate(
+            Left_Var=_['left_clipped'].var(),
+            Right_Var=_['right_clipped'].var(),
+            Combined_Var=_['combined_clipped'].var()
         )
 
-        # Combined variance
-        join_conditions_combined = [
-            neighbor[datetime_column] >= (center[datetime_column] - ibis.interval(days=rolling_window_days // 2)),
-            neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON),
-            neighbor[datetime_column] != center[datetime_column]
+        # Step 4: Join variance results back (single join instead of three)
+        base_table = table_with_quantiles.drop([
+            'left_lower', 'left_upper', 'right_lower', 'right_upper', 
+            'combined_lower', 'combined_upper'
+        ])
+
+        # Single join with all variance results
+        variance_join_conditions = [
+            base_table['row_num'] == all_variances['center_row'],
+            base_table[datetime_column] == all_variances['center_date']
         ]
-        # Add grouping column conditions
         for col in grouping_columns:
-            join_conditions_combined.append(center[col] == neighbor[col])
-            
-        combined_pairs = center.join(
-            neighbor,
-            join_conditions_combined
-        ).select(
-            center_row=center['row_num'],
-            center_date=center[datetime_column],
-            **{f'center_{col}': center[col] for col in grouping_columns},
-            center_lower=center['combined_lower'],
-            center_upper=center['combined_upper'],
-            neighbor_value=neighbor[value_column]
-        )
-        combined_variance = combined_pairs.mutate(
-            clipped_neighbor_value=combined_pairs['neighbor_value'].clip(combined_pairs['center_lower'], combined_pairs['center_upper'])
-        ).group_by(['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]).aggregate(
-            Combined_Var=_['clipped_neighbor_value'].var()
-        )
-
-        # Step 4: Join all variance results back
-        base_table = table_with_quantiles.drop(['left_lower', 'left_upper', 'right_lower', 'right_upper', 'combined_lower', 'combined_upper'])
-
-        # Join with left_variance
-        left_join_conditions = [
-            base_table['row_num'] == left_variance['center_row'],
-            base_table[datetime_column] == left_variance['center_date']
-        ]
-        for col in grouping_columns:
-            left_join_conditions.append(base_table[col] == left_variance[f'center_{col}'])
+            variance_join_conditions.append(base_table[col] == all_variances[f'center_{col}'])
             
         result = base_table.join(
-            left_variance,
-            left_join_conditions,
+            all_variances,
+            variance_join_conditions,
             how='left'
-        ).select(base_table, 'Left_Var')
-
-        # Join with right_variance
-        right_join_conditions = [
-            result['row_num'] == right_variance['center_row'],
-            result[datetime_column] == right_variance['center_date']
-        ]
-        for col in grouping_columns:
-            right_join_conditions.append(result[col] == right_variance[f'center_{col}'])
-            
-        result = result.join(
-            right_variance,
-            right_join_conditions,
-            how='left'
-        ).select(result, 'Right_Var')
-
-        # Join with combined_variance
-        combined_join_conditions = [
-            result['row_num'] == combined_variance['center_row'],
-            result[datetime_column] == combined_variance['center_date']
-        ]
-        for col in grouping_columns:
-            combined_join_conditions.append(result[col] == combined_variance[f'center_{col}'])
-            
-        result = result.join(
-            combined_variance,
-            combined_join_conditions,
-            how='left'
-        ).select(result, 'Combined_Var')
-
-        # Drop row_num column
-        result = result.drop('row_num')
+        ).select(base_table, 'Left_Var', 'Right_Var', 'Combined_Var').drop('row_num')
         
     else:
         # Standard variance calculation
