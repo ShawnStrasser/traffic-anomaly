@@ -130,16 +130,18 @@ def anomaly(
         if log_adjust_negative:
             # Adjust negative GEH to be more extreme
             result = result.mutate(resid=_.resid * multiplier_func(table[value_column], table.prediction))
-        result = result.mutate(anomaly=_.resid.abs() > entity_threshold)
+        # Handle NULL values in entity-level anomaly detection with GEH
+        result = result.mutate(anomaly=(_.resid.abs() > entity_threshold).fill_null(False))
         
     else:
         if log_adjust_negative:
             # Adjust negative resid to be more extreme
             table = table.mutate(resid=_.resid * multiplier_func(table[value_column], table.prediction))
+        # Handle NULL values in entity-level anomaly detection with z-scores
         result = (
             table
             .group_by(entity_grouping_columns)
-            .mutate(anomaly=zscore_func(_.resid) > entity_threshold)
+            .mutate(anomaly=(zscore_func(_.resid) > entity_threshold).fill_null(False))
         )
 
     ##############################
@@ -150,13 +152,13 @@ def anomaly(
             result = (
                 result
                 .group_by(group_grouping_columns + [datetime_column])
-                .mutate(anomaly=(MAD_func(_.resid) > group_threshold) & _.anomaly)
+                .mutate(anomaly=((MAD_func(_.resid) > group_threshold) & _.anomaly).fill_null(False))
             )
         else:
             result = (
                 result
                 .group_by(group_grouping_columns + [datetime_column])
-                .mutate(anomaly=(zscore_func(_.resid) > group_threshold) & _.anomaly)
+                .mutate(anomaly=((zscore_func(_.resid) > group_threshold) & _.anomaly).fill_null(False))
             )
 
     if connectivity_table is not None:
@@ -218,8 +220,9 @@ def anomaly(
         result = result.mutate(max_next_anomaly=_.max_next_anomaly.fill_null(1))
 
         # Calculate originated_anomaly
+        # Fill NULL anomalies with False before casting to ensure no NULL originated_anomaly values
         result = result.mutate(
-            originated_anomaly=(_.anomaly.cast('int8') > _.max_next_anomaly)
+            originated_anomaly=(_.anomaly.fill_null(False).cast('int8') > _.max_next_anomaly)
         ).drop('max_next_anomaly')
 
     if return_sql:
