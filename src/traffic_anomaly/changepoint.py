@@ -367,8 +367,8 @@ def changepoint(
         raise ValueError("lower_bound must be less than upper_bound")
     if rolling_window_days <= 0:
         raise ValueError("rolling_window_days must be positive")
-    if min_separation_days < 0:
-        raise ValueError("min_separation_days must be non-negative")
+    if min_separation_days <= 0:
+        raise ValueError("min_separation_days must be positive")
     if min_samples <= 0:
         raise ValueError("min_samples must be positive")
     
