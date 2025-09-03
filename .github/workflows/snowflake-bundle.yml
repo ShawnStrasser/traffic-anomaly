@@ -14,7 +14,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.13'  # Adjust to match Snowflake's supported Python version
+        python-version: '3.13'
 
     - name: Create virtual environment
       run: python -m venv venv
@@ -26,11 +26,29 @@ jobs:
         pip install "ibis-framework[duckdb]>=10,<11"
         pip install .
 
-    - name: Prepare bundle
+    - name: Prepare Snowflake-compatible bundle
       run: |
         . venv/bin/activate
+        
+        # Get the site-packages directory
         SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
-        zip -r snowflake_bundle.zip $SITE_PACKAGES/*
+        
+        # Create a staging directory
+        mkdir -p snowflake_staging
+        
+        # Copy all packages to the staging directory (flattened structure)
+        cp -r $SITE_PACKAGES/* snowflake_staging/
+        
+        # Remove unnecessary files that Snowflake doesn't need
+        find snowflake_staging -name "*.pyc" -delete
+        find snowflake_staging -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+        find snowflake_staging -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true
+        find snowflake_staging -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true
+        
+        # Create the zip file from within the staging directory
+        cd snowflake_staging
+        zip -r ../snowflake_bundle.zip .
+        cd ..
 
     - name: Upload bundle as artifact
       if: github.event_name == 'workflow_dispatch'
@@ -40,12 +58,8 @@ jobs:
         path: snowflake_bundle.zip
 
     - name: Upload bundle to release
-      if: github.event_name == 'release'
-      uses: actions/upload-release-asset@v1
+      uses: softprops/action-gh-release@v1
+      with:
+        files: snowflake_bundle.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./snowflake_bundle.zip
-        asset_name: snowflake_bundle.zip
-        asset_content_type: application/zip
