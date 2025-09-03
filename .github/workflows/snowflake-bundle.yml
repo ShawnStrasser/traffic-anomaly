@@ -57,9 +57,18 @@ jobs:
         name: snowflake-bundle
         path: snowflake_bundle.zip
 
+    - name: Get latest release tag (for manual runs)
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        LATEST_TAG=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/latest" | \
+          grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+
     - name: Upload bundle to release
       uses: softprops/action-gh-release@v1
       with:
         files: snowflake_bundle.zip
+        tag_name: ${{ github.event_name == 'workflow_dispatch' && env.LATEST_TAG || github.ref_name }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
