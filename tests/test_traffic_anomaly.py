@@ -1091,8 +1091,17 @@ class TestTrafficAnomaly:
                 rolling_window_days=-5
             )
         
-        # Test invalid min_separation_days (<0)
-        with pytest.raises(ValueError, match="min_separation_days must be non-negative"):
+        # Test invalid min_separation_days (<=0)
+        with pytest.raises(ValueError, match="min_separation_days must be positive"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                min_separation_days=0
+            )
+        
+        with pytest.raises(ValueError, match="min_separation_days must be positive"):
             traffic_anomaly.changepoint(
                 data=valid_data,
                 datetime_column='TimeStamp',

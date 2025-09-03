@@ -273,7 +273,7 @@ def _calculate_changepoints_core(
     changepoints = changepoints.mutate(
         avg_diff=changepoints['avg_after'] - changepoints['avg_before'],
         pct_change=((changepoints['avg_after'] - changepoints['avg_before']) / 
-                   ibis.greatest(changepoints['avg_before'].abs(), EPSILON) * 100)
+                   ibis.greatest(changepoints['avg_before'].abs(), EPSILON))
     )
 
     # Select relevant columns
