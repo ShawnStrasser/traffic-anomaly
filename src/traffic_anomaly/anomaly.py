@@ -34,7 +34,8 @@ def anomaly(
     MAD: bool = False,
     log_adjust_negative: bool = False,
     connectivity_table: Optional[Union[ibis.Expr, Any]] = None,
-    return_sql: bool = False
+    return_sql: bool = False,
+    dialect = None
 ) -> Union[ibis.Expr, Any, str]:  # ibis.Expr, pandas.DataFrame, or str
     """
     Detect anomalies in the time series data at both entity and group levels.
@@ -53,6 +54,7 @@ def anomaly(
         connectivity_table: Optional table to calculate originated anomalies. 
                            When provided, only a single entity_grouping_column is supported.
         return_sql: Whether to return the SQL query string instead of the result.
+        dialect: Option to output a specific SQL dialect when return_sql=True
 
     Returns:
         The detected anomalies with columns from the input data and an additional 'anomaly' column.
@@ -172,10 +174,16 @@ def anomaly(
 
         # Validate connectivity table columns
         entity_col = entity_grouping_columns[0]
-        next_entity_col = f"next_{entity_col}"
-
-        if entity_col not in conn_table.columns or next_entity_col not in conn_table.columns:
-            raise ValueError(f"Connectivity table must contain '{entity_col}' and '{next_entity_col}' columns.")
+        
+        # Find the next_entity_col in a case-insensitive way
+        next_entity_col_name = None
+        for col in conn_table.columns:
+            if col.lower() == f"next_{entity_col}".lower():
+                next_entity_col_name = col
+                break
+        
+        if entity_col not in conn_table.columns or next_entity_col_name is None:
+            raise ValueError(f"Connectivity table must contain '{entity_col}' and a 'next_{entity_col}' column (case-insensitive).")
 
         # Calculate originated anomaly
         anomaly_source = result.select(datetime_column, entity_col, 'anomaly')
@@ -185,10 +193,10 @@ def anomaly(
 
         # Prepare next anomaly info
         next_anomaly_info = anomaly_source.rename(
-            **{next_entity_col: entity_col}
+            **{next_entity_col_name: entity_col}
         ).select(
             datetime_column,
-            next_entity_col,
+            next_entity_col_name,
             next_anomaly='anomaly'
         )
 
@@ -196,7 +204,7 @@ def anomaly(
         # Join to get next_anomaly
         merged = with_conn.join(
             next_anomaly_info,
-            [datetime_column, next_entity_col]
+            [datetime_column, next_entity_col_name]
         )
 
         # Cast to int for aggregation
@@ -226,7 +234,7 @@ def anomaly(
         ).drop('max_next_anomaly')
 
     if return_sql:
-        return ibis.to_sql(result)
+        return ibis.to_sql(result, dialect=dialect)
     elif isinstance(decomposed_data, ibis.Expr):
         return result  # Return Ibis expression directly if input was Ibis
     else:

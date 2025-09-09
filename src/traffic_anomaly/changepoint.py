@@ -296,7 +296,8 @@ def changepoint(
     score_threshold: float = 5.0,
     min_separation_days: int = 3,
     min_samples: int = 30,
-    return_sql: bool = False
+    return_sql: bool = False,
+    dialect = None
 ) -> Union[ibis.Expr, Any, str]:  # ibis.Expr, pandas.DataFrame, or str
     """
     Detect changepoints in multivariate time series data using variance-based scoring.
@@ -336,6 +337,7 @@ def changepoint(
         If this requirement is not met, the score is set to 0 rather than being calculated.
     return_sql : bool, default False
         If True, return SQL query string instead of executing
+    dialect: Option to output a specific SQL dialect when return_sql=True
         
     Returns
     -------
@@ -434,7 +436,7 @@ def changepoint(
     
     # Return results based on parameters
     if return_sql:
-        return ibis.to_sql(final_result)
+        return ibis.to_sql(final_result, dialect=dialect)
     elif isinstance(data, ibis.Expr):
         return final_result  # Return Ibis expression directly if input was Ibis
     else:

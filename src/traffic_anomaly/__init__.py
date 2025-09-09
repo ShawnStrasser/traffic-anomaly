@@ -5,4 +5,4 @@ from .sample_data import sample_data
 
 __all__ = ['decompose', 'anomaly', 'changepoint']
 
-__version__ = '2.2.2'
+__version__ = '2.3.0'

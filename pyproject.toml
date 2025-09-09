@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "traffic_anomaly"
-version = "2.2.2"
+version = "2.3.0"
 authors = [
   { name="Shawn Strasser", email="shawn.strasser@odot.oregon.gov" },
 ]
@@ -17,9 +21,8 @@ dependencies = [
     "ibis-framework[duckdb]>=10.0.0,<11.0.0"
 ]
 
+[tool.setuptools.packages.find]
+where = ["src"]
 
-[tools.setuptools]
-include_package_data = true
-package_data = {"traffic_anomaly" = ["data/*"]}
-
-
+[tool.setuptools.package-data]
+traffic_anomaly = ["data/*.parquet"]

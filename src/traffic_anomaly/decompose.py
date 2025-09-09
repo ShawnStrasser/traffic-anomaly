@@ -34,7 +34,8 @@ def decompose(
     min_time_of_day_samples: int = 7,
     rolling_window_enable: bool = True,
     drop_extras: bool = True,
-    return_sql: bool = False
+    return_sql: bool = False,
+    dialect = None
 ) -> Union[ibis.Expr, Any, str]:  # ibis.Expr, pandas.DataFrame, or str
     """
     Decomposes a time series dataset into rolling median, seasonal (day and week), and residual components.
@@ -53,6 +54,7 @@ def decompose(
                               If False, disables all rolling functions, including drop days, and uses a static median.
         drop_extras: Whether to drop extra columns from the result.
         return_sql: Whether to return the result as an SQL query string.
+        dialect: Option to output a specific SQL dialect when return_sql=True
 
     Returns:
         The decomposed time series data with the following columns:
@@ -155,7 +157,7 @@ def decompose(
         result = result.drop('median', 'season_day', 'season_week')
 
     if return_sql:
-        return ibis.to_sql(result)
+        return ibis.to_sql(result, dialect=dialect)
     elif isinstance(data, ibis.Expr):
         return result  # Return Ibis expression directly if input was Ibis
     else:
