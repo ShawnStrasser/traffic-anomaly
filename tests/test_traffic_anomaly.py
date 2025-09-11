@@ -302,6 +302,48 @@ class TestTrafficAnomaly:
         # Compare results
         self._compare_dataframes(changepoints_standard, expected, "changepoint_standard")
     
+    def test_changepoint_sql_with_snowflake_dialect(self):
+        """Test changepoint detection with return_sql=True and dialect='snowflake'"""
+        # Load sample changepoint input data
+        df = sample_data.changepoints_input
+        
+        # Get SQL query with Snowflake dialect
+        sql_query = traffic_anomaly.changepoint(
+            df,
+            value_column='travel_time_seconds',
+            entity_grouping_column='ID',
+            datetime_column='TimeStamp',
+            score_threshold=0.7,
+            robust=True,
+            return_sql=True,
+            dialect="snowflake"
+        )
+        
+        # Verify that SQL query is returned as a string
+        assert isinstance(sql_query, str), "SQL query should be returned as a string"
+        assert len(sql_query) > 0, "SQL query should not be empty"
+        
+        # Verify that the SQL contains expected Snowflake-specific elements or standard SQL constructs
+        assert "SELECT" in sql_query.upper(), "SQL should contain SELECT statement"
+        assert "FROM" in sql_query.upper(), "SQL should contain FROM clause"
+        
+        # Test with standard parameters (robust=False) as well
+        sql_query_standard = traffic_anomaly.changepoint(
+            df,
+            value_column='travel_time_seconds',
+            entity_grouping_column='ID',
+            datetime_column='TimeStamp',
+            score_threshold=0.7,
+            robust=False,
+            return_sql=True,
+            dialect="snowflake"
+        )
+        
+        # Verify second query is also valid
+        assert isinstance(sql_query_standard, str), "Standard SQL query should be returned as a string"
+        assert len(sql_query_standard) > 0, "Standard SQL query should not be empty"
+        assert "SELECT" in sql_query_standard.upper(), "Standard SQL should contain SELECT statement"
+    
     def _compare_dataframes(self, actual, expected, test_name):
         """Helper method to compare two dataframes with detailed error reporting"""
         
