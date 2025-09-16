@@ -11,7 +11,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/ShawnStrasser/traffic-anomaly)](https://github.com/ShawnStrasser/traffic-anomaly/stargazers)
 
 <!-- Status -->
-[![Unit Tests](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml/badge.svg?branch=traffic_anomaly_package)](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml)
+[![Unit Tests](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml/badge.svg?branch=main)](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml)
 [![codecov](https://codecov.io/gh/ShawnStrasser/traffic-anomaly/badge.svg)](https://codecov.io/gh/ShawnStrasser/traffic-anomaly)
 
 `traffic-anomaly` is a production-ready Python package for robust anomaly and changepoint detection across multi-entity time series. It uses Ibis to integrate with any SQL backend in the cloud or run locally with the included DuckDB backend.

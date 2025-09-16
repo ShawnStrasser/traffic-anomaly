@@ -48,9 +48,7 @@ jobs:
     - name: Install dependencies
       run: |
         pip install pytest pytest-cov build pandas pyarrow toml
-        pip install "ibis-framework[duckdb]>=10,<11"
-        # Install the package without deps so the pinned ibis stays in place
-        pip install --no-deps .
+        pip install .
 
     - name: Build package
       run: python -m build
