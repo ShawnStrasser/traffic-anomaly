@@ -47,7 +47,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install pytest pytest-cov build pandas pyarrow toml
+        pip install pytest pytest-cov build pandas pyarrow pyarrow-hotfix toml
         pip install .
 
     - name: Build package
