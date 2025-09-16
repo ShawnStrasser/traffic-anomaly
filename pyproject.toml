@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "traffic_anomaly"
-version = "2.3.0"
+version = "2.4.0"
 authors = [
   { name="Shawn Strasser", email="shawn.strasser@odot.oregon.gov" },
 ]
@@ -18,7 +18,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "ibis-framework[duckdb]>=10.0.0,<11.0.0"
+    "ibis-framework>=10.0.0,<11.0.0",
+    "duckdb>=1.0.0,<1.4.0"
 ]
 
 [tool.setuptools.packages.find]
