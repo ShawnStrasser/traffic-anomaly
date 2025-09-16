@@ -4,7 +4,7 @@ from typing import Union, List, Any
 # Note: This function accepts ibis.Expr or pandas.DataFrame as input
 # pandas is not required - ibis.memtable() can handle pandas DataFrames if pandas is available
 
-INTERVAL_EPSILON = ibis.interval(seconds=1)
+SECONDS_PER_DAY = 86400
 EPSILON = 1e-6
 
 def _validate_columns(table: ibis.Expr, datetime_column: str, value_column: str, entity_grouping_column: Union[str, List[str]]) -> None:
@@ -40,6 +40,11 @@ def _calculate_changepoints_core(
     min_samples: int
 ) -> ibis.Expr:
     """Core changepoint calculation logic."""
+    # Calculate intervals once for reuse throughout the function
+    half_days = rolling_window_days // 2
+    half_window_secs_minus_1 = (half_days * SECONDS_PER_DAY) - 1
+    min_separation_secs_minus_1 = (min_separation_days * SECONDS_PER_DAY) - 1
+    
     # Shift value_column forward for the left window
     table = table.mutate(
         lag_column=_[value_column].lag(1).over(
@@ -51,7 +56,7 @@ def _calculate_changepoints_core(
     left_window = ibis.window(
         group_by=grouping_columns,
         order_by=datetime_column,
-        preceding=ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON,  # added because values will be shifted forward to remove the current row
+        preceding=ibis.interval(seconds=half_window_secs_minus_1),  # subtract epsilon in the literal
         following=0
     )
 
@@ -59,14 +64,14 @@ def _calculate_changepoints_core(
         group_by=grouping_columns,
         order_by=datetime_column,
         preceding=0,
-        following=ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON
+        following=ibis.interval(seconds=half_window_secs_minus_1)
     )
 
     combined_window = ibis.window(
         group_by=grouping_columns,
         order_by=datetime_column,
-        preceding=ibis.interval(days=rolling_window_days // 2),
-        following=ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON
+        preceding=ibis.interval(days=half_days),
+        following=ibis.interval(seconds=half_window_secs_minus_1)
     )
     
     if robust:
@@ -100,8 +105,8 @@ def _calculate_changepoints_core(
 
         # Single join for all window relationships
         join_conditions_all = [
-            neighbor[datetime_column] >= (center[datetime_column] - ibis.interval(days=rolling_window_days // 2)),
-            neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON)
+            neighbor[datetime_column] >= (center[datetime_column] - ibis.interval(days=half_days)),
+            neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(seconds=half_window_secs_minus_1))
         ]
         # Add grouping column conditions
         for col in grouping_columns:
@@ -196,7 +201,7 @@ def _calculate_changepoints_core(
     result = joined_result.select(result, 'min_ts', 'max_ts')
 
     # Add cost and score columns, making score NaN if the window is incomplete
-    half_window_interval = ibis.interval(days=rolling_window_days // 2)
+    half_window_interval = ibis.interval(days=half_days)
     result = result.mutate(
         Combined_Cost=(20 * (result['Combined_Var'] + EPSILON).ln()),
         Left_Cost=(10 * (result['Left_Var'] + EPSILON).ln()),
@@ -213,14 +218,14 @@ def _calculate_changepoints_core(
     sample_window_before = ibis.window(
         group_by=grouping_columns,
         order_by=datetime_column,
-        preceding=ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON,
+        preceding=ibis.interval(seconds=half_window_secs_minus_1),
         following=0
     )
     sample_window_after = ibis.window(
         group_by=grouping_columns,
         order_by=datetime_column,
         preceding=0,
-        following=ibis.interval(days=rolling_window_days // 2) - INTERVAL_EPSILON
+        following=ibis.interval(seconds=half_window_secs_minus_1)
     )
     
     result = result.mutate(
@@ -254,7 +259,7 @@ def _calculate_changepoints_core(
     window_before_peak = ibis.window(
         group_by=grouping_columns,
         order_by=datetime_column,
-        preceding=ibis.interval(days=min_separation_days)-INTERVAL_EPSILON, #added because values will be shited forward to remove the current row
+        preceding=ibis.interval(seconds=min_separation_secs_minus_1), #added because values will be shifted forward to remove the current row
         following=0
     )
 
