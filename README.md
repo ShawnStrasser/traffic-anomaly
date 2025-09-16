@@ -28,7 +28,30 @@ Designed for real-world traffic data (volumes, travel times), `traffic-anomaly` 
 pip install traffic-anomaly
 ```
 
-> **Note**: This package currently uses a forked version of `ibis-framework` to support expressions in window functions on Snowflake (a feature added to Snowflake in August 2024 but not yet supported in the official Ibis release). The fork will be replaced with the official PyPI version once the upstream changes are merged.
+<details>
+<summary><strong>Snowflake Compatibility</strong></summary>
+
+For enhanced Snowflake compatibility (including support for expressions in window functions, added to Snowflake in August 2024), first install the package normally, then upgrade ibis to the Snowflake-compatible version:
+
+```bash
+# 1. Install traffic-anomaly normally
+pip install traffic-anomaly
+
+# 2. Upgrade ibis for Snowflake compatibility
+pip install --force-reinstall "ibis-framework[duckdb] @ https://github.com/ShawnStrasser/ibis/archive/a1142d81965dc0f1650c2091de3e405d2dba6e5b.zip"
+```
+
+**Windows Users**: If the second command fails with path-related errors, you may need to enable long paths in Windows. Run this command as Administrator in PowerShell, then restart your computer:
+
+```powershell
+New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+```
+
+The Snowflake-compatible version uses a forked version of `ibis-framework` that supports expressions in window functions on Snowflake. This will be replaced with the official PyPI version once the upstream changes are merged.
+
+**Example Usage**: For a complete example of loading packages from Windows to Snowflake, see the [signal-analytics-snowflake](https://github.com/TPAU-ODOT/signal-analytics-snowflake) repository.
+
+</details>
 
 ## Usage
 
