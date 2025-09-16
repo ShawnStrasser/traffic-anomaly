@@ -2,11 +2,11 @@ name: Unit Tests
 
 on:
   push:
-    branches: [ traffic_anomaly_package, main, master ]
+    branches: [ main ]
     paths:
       - 'src/**'
   pull_request:
-    branches: [ traffic_anomaly_package, main, master ]
+    branches: [ main ]
     paths:
       - 'src/**'
   release:
