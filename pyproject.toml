@@ -18,7 +18,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "ibis-framework[duckdb]>=10.0.0,<11.0.0"
+    # "ibis-framework[duckdb]>=10.0.0,<11.0.0",  # Original PyPI version, replaced temporarily with forked version for snowflake compatibility
+    "ibis-framework[duckdb] @ git+https://github.com/ShawnStrasser/ibis.git"  # Forked version
 ]
 
 [tool.setuptools.packages.find]

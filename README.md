@@ -28,6 +28,8 @@ Designed for real-world traffic data (volumes, travel times), `traffic-anomaly` 
 pip install traffic-anomaly
 ```
 
+> **Note**: This package currently uses a forked version of `ibis-framework` to support expressions in window functions on Snowflake (a feature added to Snowflake in August 2024 but not yet supported in the official Ibis release). The fork will be replaced with the official PyPI version once the upstream changes are merged.
+
 ## Usage
 
 ```python
