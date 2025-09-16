@@ -23,7 +23,7 @@ Designed for real-world traffic data (volumes, travel times), `traffic-anomaly` 
 
 
 ## Installation
-
+It is recommended to use a virtual environment to avoid dependency conflicts.
 ```bash
 pip install traffic-anomaly
 ```
@@ -31,17 +31,19 @@ pip install traffic-anomaly
 <details>
 <summary><strong>Snowflake Compatibility</strong></summary>
 
-For enhanced Snowflake compatibility (including support for expressions in window functions, added to Snowflake in August 2024), first install the package normally, then upgrade ibis to the Snowflake-compatible version:
+For enhanced Snowflake compatibility (including support for expressions in window functions, added to Snowflake in August 2024), follow these steps:
 
+**Step 1:** Install traffic-anomaly normally
 ```bash
-# 1. Install traffic-anomaly normally
 pip install traffic-anomaly
-
-# 2. Upgrade ibis for Snowflake compatibility
-pip install --force-reinstall "ibis-framework[duckdb] @ https://github.com/ShawnStrasser/ibis/archive/a1142d81965dc0f1650c2091de3e405d2dba6e5b.zip"
 ```
 
-**Windows Users**: If the second command fails with path-related errors, you may need to enable long paths in Windows. Run this command as Administrator in PowerShell, then restart your computer:
+**Step 2:** Reinstall ibis with Snowflake compatibility (without overwriting dependencies)
+```bash
+pip install --force-reinstall --no-deps "ibis-framework @ https://github.com/ShawnStrasser/ibis/archive/a1142d81965dc0f1650c2091de3e405d2dba6e5b.zip"
+```
+
+**Windows Users**: If Step 2 fails with path-related errors, enable long paths in Windows by running this command as Administrator in PowerShell, then restart your computer:
 
 ```powershell
 New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
