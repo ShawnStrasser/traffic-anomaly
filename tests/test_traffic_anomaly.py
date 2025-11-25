@@ -301,6 +301,25 @@ class TestTrafficAnomaly:
         
         # Compare results
         self._compare_dataframes(changepoints_standard, expected, "changepoint_standard")
+
+    def test_changepoint_standard_recent_window(self):
+        """Test changepoint detection with a recent-window post-filter (3 days)"""
+        df = sample_data.changepoints_input
+
+        changepoints_recent = traffic_anomaly.changepoint(
+            df,
+            value_column='travel_time_seconds',
+            entity_grouping_column='ID',
+            datetime_column='TimeStamp',
+            score_threshold=0.7,
+            robust=False,
+            recent_days_for_validation=3
+        )
+
+        expected_path = os.path.join(self.precalculated_dir, 'test_changepoint_recent3.parquet')
+        expected = pd.read_parquet(expected_path)
+
+        self._compare_dataframes(changepoints_recent, expected, "changepoint_standard_recent_window")
     
     # TODO: Uncomment when Snowflake-compatible ibis version is merged upstream
     # def test_changepoint_sql_with_snowflake_dialect(self):
@@ -1132,6 +1151,16 @@ class TestTrafficAnomaly:
                 value_column='travel_time_seconds',
                 entity_grouping_column='ID',
                 rolling_window_days=-5
+            )
+
+        with pytest.raises(ValueError, match="recent window days must not exceed half the rolling window size"):
+            traffic_anomaly.changepoint(
+                data=valid_data,
+                datetime_column='TimeStamp',
+                value_column='travel_time_seconds',
+                entity_grouping_column='ID',
+                rolling_window_days=10,
+                recent_days_for_validation=6
             )
         
         # Test invalid min_separation_days (<=0)

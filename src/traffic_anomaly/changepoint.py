@@ -301,6 +301,7 @@ def changepoint(
     score_threshold: float = 5.0,
     min_separation_days: int = 3,
     min_samples: int = 30,
+    recent_days_for_validation: int = 0,
     return_sql: bool = False,
     dialect = None
 ) -> Union[ibis.Expr, Any, str]:  # ibis.Expr, pandas.DataFrame, or str
@@ -340,6 +341,8 @@ def changepoint(
     min_samples : int, default 30
         Minimum number of samples required in both before and after windows for a changepoint score to be calculated.
         If this requirement is not met, the score is set to 0 rather than being calculated.
+    recent_days_for_validation : int, default 0
+        Post-filter: length (in days) of the recent window per changepoint to average. Set to 0 to disable.
     return_sql : bool, default False
         If True, return SQL query string instead of executing
     dialect: Option to output a specific SQL dialect when return_sql=True
@@ -378,6 +381,11 @@ def changepoint(
         raise ValueError("min_separation_days must be positive")
     if min_samples <= 0:
         raise ValueError("min_samples must be positive")
+    recent_window_days = recent_days_for_validation
+    if recent_window_days < 0:
+        raise ValueError("recent window days must be non-negative")
+    if recent_window_days > rolling_window_days / 2:
+        raise ValueError("recent window days must not exceed half the rolling window size")
     
     # Check if data is an Ibis table
     if isinstance(data, ibis.Expr):
@@ -438,6 +446,39 @@ def changepoint(
             rolling_window_days, False, upper_bound, lower_bound,
             score_threshold, min_separation_days, min_samples
         )
+
+    # Optional post-filter: drop changepoints whose recent mean is closer to the pre-change baseline
+    if recent_window_days > 0:
+        cp = final_result.alias('cp')
+        data_alias = table.alias('data')
+        recent_interval = ibis.interval(days=recent_window_days)
+
+        join_conditions = (
+            [cp[col] == data_alias[col] for col in grouping_columns] +
+            [
+                data_alias[datetime_column] >= cp[datetime_column],
+                data_alias[datetime_column] <= cp[datetime_column] + recent_interval
+            ]
+        )
+
+        recent_means = cp.join(data_alias, join_conditions, how='inner').group_by(
+            [cp[col] for col in grouping_columns] + [cp[datetime_column]]
+        ).aggregate(
+            avg_recent=data_alias[value_column].mean()
+        )
+
+        original_columns = final_result.columns
+        final_with_recent = final_result.join(recent_means, grouping_columns + [datetime_column], how='left')
+        final_with_recent = final_with_recent.mutate(
+            dist_before=(final_with_recent['avg_recent'] - final_with_recent['avg_before']).abs(),
+            dist_after=(final_with_recent['avg_recent'] - final_with_recent['avg_after']).abs()
+        ).mutate(
+            closer_to_before=ibis.coalesce(_.dist_before < _.dist_after, False)
+        )
+
+        final_result = final_with_recent.filter(~final_with_recent['closer_to_before']).drop(
+            ['avg_recent', 'dist_before', 'dist_after', 'closer_to_before']
+        ).select(original_columns)
     
     # Return results based on parameters
     if return_sql:

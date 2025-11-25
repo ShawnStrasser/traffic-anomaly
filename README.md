@@ -141,7 +141,8 @@ changepoints = changepoint(
     rolling_window_days=14,  # Size of analysis window
     robust=True,  # Use robust (Winsorized) variance for better outlier handling, but computation is much slower
     score_threshold=5,  # Threshold for change point detection (lower = more sensitive)
-    min_separation_days=3  # Minimum days between detected change points
+    min_separation_days=3,  # Minimum days between detected change points
+    recent_days_for_validation=0  # Optional post-filter; set >0 to drop changes that quickly revert, try setting to 3
 )
 changepoints.head(3)
 ```
@@ -161,6 +162,7 @@ Parameters
 - `score_threshold`: Higher values detect fewer, more significant change points
 - `rolling_window_days`: Size of the analysis window (split between before/after periods)
 - `min_separation_days`: Prevents detecting multiple change points too close together
+- `recent_days_for_validation`: Post-filter lookahead window (days) per changepoint. Defaults to `0` (disabled). Must be ≤ half the rolling window; when enabled, changepoints whose recent average is closer to the pre-change baseline than the post-change level are dropped.
 
 ## Considerations
 
