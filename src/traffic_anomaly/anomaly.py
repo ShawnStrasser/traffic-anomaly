@@ -231,11 +231,16 @@ def anomaly(
         # Fill NULL anomalies with False before casting to ensure no NULL originated_anomaly values
         result = result.mutate(
             originated_anomaly=(_.anomaly.fill_null(False).cast('int8') > _.max_next_anomaly)
-        ).drop('max_next_anomaly')
+        )
 
     if return_sql:
+        if connectivity_table is not None:
+            return ibis.to_sql(result.drop('max_next_anomaly'), dialect=dialect)
         return ibis.to_sql(result, dialect=dialect)
     elif isinstance(decomposed_data, ibis.Expr):
-        return result  # Return Ibis expression directly if input was Ibis
+        return result.drop('max_next_anomaly') if connectivity_table is not None else result
     else:
-        return result.execute()  # Convert to pandas for non-Ibis input
+        executed = result.execute()
+        if connectivity_table is not None and 'max_next_anomaly' in executed.columns:
+            executed = executed.drop(columns=['max_next_anomaly'])
+        return executed  # Convert to pandas for non-Ibis input
