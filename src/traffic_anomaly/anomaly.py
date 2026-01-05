@@ -21,6 +21,9 @@ def _validate_columns(table: ibis.Expr, datetime_column: str, value_column: str,
     if missing_columns:
         raise ValueError(f"Missing required columns: {missing_columns}")
 
+    if not table[datetime_column].type().is_temporal():
+        raise TypeError(f"Column '{datetime_column}' must be a temporal type (e.g., timestamp or date), but is {table[datetime_column].type()}")
+
 
 def anomaly(
     decomposed_data: Union[ibis.Expr, Any],  # ibis.Expr or pandas.DataFrame

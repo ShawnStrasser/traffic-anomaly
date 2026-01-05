@@ -885,6 +885,43 @@ class TestTrafficAnomaly:
                 entity_grouping_columns=['id']
             )
 
+    def test_invalid_timestamp_type(self):
+        """Test that providing a string timestamp raises a TypeError"""
+        df_string_ts = pd.DataFrame({
+            'timestamp': ['2023-01-01 00:00:00'],
+            'value': [10],
+            'id': ['A'],
+            'prediction': [10],
+            'resid': [0]
+        })
+
+        # Test decompose
+        with pytest.raises(TypeError, match="must be a temporal type"):
+            traffic_anomaly.decompose(
+                data=df_string_ts,
+                datetime_column='timestamp',
+                value_column='value',
+                entity_grouping_columns=['id']
+            )
+
+        # Test anomaly
+        with pytest.raises(TypeError, match="must be a temporal type"):
+            traffic_anomaly.anomaly(
+                decomposed_data=df_string_ts,
+                datetime_column='timestamp',
+                value_column='value',
+                entity_grouping_columns=['id']
+            )
+
+        # Test changepoint
+        with pytest.raises(TypeError, match="must be a temporal type"):
+            traffic_anomaly.changepoint(
+                data=df_string_ts,
+                datetime_column='timestamp',
+                value_column='value',
+                entity_grouping_column='id'
+            )
+
     def test_anomaly_missing_columns(self):
         """Test anomaly detection with missing required columns"""
         # Test missing datetime column
