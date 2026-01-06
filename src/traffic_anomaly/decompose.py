@@ -164,5 +164,15 @@ def decompose(
     elif isinstance(data, ibis.Expr):
         return result  # Return Ibis expression directly if input was Ibis
     else:
-        return result.execute()  # Convert to pandas (or similar) only for non-Ibis inputs
-    
+        # Force explicit column projection to prevent schema mismatch errors.
+        # Ibis/DuckDB optimization can convert column selections to SELECT *,
+        # which may include dropped intermediate columns. This workaround applies
+        # a no-op (+0.0) to force expression generation in the final projection.
+        # See issue #12.
+        result = result.select(
+            *[
+                (result[c] + 0.0).cast(result[c].type()).name(c) if c == 'prediction' else result[c]
+                for c in result.columns
+            ]
+        )
+        return result.execute()
