@@ -164,20 +164,15 @@ def decompose(
     elif isinstance(data, ibis.Expr):
         return result  # Return Ibis expression directly if input was Ibis
     else:
-        # Explicitly select columns to ensure schema alignment between Ibis and the backend result.
-        # This prevents "schema names don't match input data columns" errors when extra columns are present.
-        # Workaround: Ibis/DuckDB optimization sometimes converts a select of all columns to `SELECT *`,
-        # which can mistakenly include dropped intermediate columns from the underlying query.
-        # We force an explicit projection by applying a no-op to the 'prediction' column.
-
-        cols = []
-        for c in result.columns:
-            if c == 'prediction':
-                # Add 0.0 and cast back to original type to force expression generation
-                # This prevents Ibis from optimizing to SELECT *
-                cols.append((result[c] + 0.0).cast(result[c].type()).name(c))
-            else:
-                cols.append(result[c])
-
-        return result.select(cols).execute()
-    
+        # Force explicit column projection to prevent schema mismatch errors.
+        # Ibis/DuckDB optimization can convert column selections to SELECT *,
+        # which may include dropped intermediate columns. This workaround applies
+        # a no-op (+0.0) to force expression generation in the final projection.
+        # See issue #12.
+        result = result.select(
+            *[
+                (result[c] + 0.0).cast(result[c].type()).name(c) if c == 'prediction' else result[c]
+                for c in result.columns
+            ]
+        )
+        return result.execute()
