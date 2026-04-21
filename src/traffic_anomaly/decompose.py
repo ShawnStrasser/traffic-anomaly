@@ -1,6 +1,7 @@
 import ibis
 from ibis import _
 from typing import Union, List, Any
+import warnings
 # Note: This function accepts ibis.Expr or pandas.DataFrame as input
 # pandas is not required - ibis.memtable() can handle pandas DataFrames if pandas is available
 
@@ -176,3 +177,15 @@ def decompose(
             ]
         )
         return result.execute()
+
+
+def median_decompose(*args, to_sql: bool = False, **kwargs):
+    """Backward-compatible wrapper for the pre-v2 decompose entry point."""
+    warnings.warn(
+        "traffic_anomaly.decompose.median_decompose() is deprecated; use traffic_anomaly.decompose.decompose() or traffic_anomaly.decompose() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    if 'return_sql' in kwargs:
+        raise TypeError("median_decompose() received both 'to_sql' and 'return_sql'. Use only one.")
+    return decompose(*args, return_sql=to_sql, **kwargs)

@@ -2,6 +2,7 @@ import pytest
 import pandas as pd
 import numpy as np
 import os
+import re
 import sys
 import toml
 
@@ -10,6 +11,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import traffic_anomaly
 from traffic_anomaly import sample_data
+from traffic_anomaly.decompose import median_decompose as median_decompose_from_module
+from traffic_anomaly.find_anomaly import find_anomaly as find_anomaly_from_module
 
 
 class TestTrafficAnomaly:
@@ -124,6 +127,66 @@ class TestTrafficAnomaly:
         
         # Compare results
         self._compare_dataframes(decomp2, expected, "decompose_vehicle_counts")
+
+    def test_median_decompose_backward_compatibility(self):
+        """Legacy median_decompose wrapper should match decompose output."""
+        current = traffic_anomaly.decompose(
+            self.vehicle_counts,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            rolling_window_enable=False
+        )
+        legacy = traffic_anomaly.median_decompose(
+            self.vehicle_counts,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            rolling_window_enable=False
+        )
+
+        self._compare_dataframes(legacy, current, "median_decompose_backward_compatibility")
+
+    def test_median_decompose_to_sql_backward_compatibility(self):
+        """Legacy median_decompose should map to_sql to return_sql."""
+        current_sql = traffic_anomaly.decompose(
+            self.vehicle_counts.head(10),
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            rolling_window_enable=False,
+            return_sql=True
+        )
+        legacy_sql = traffic_anomaly.median_decompose(
+            self.vehicle_counts.head(10),
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            rolling_window_enable=False,
+            to_sql=True
+        )
+
+        normalize_sql = lambda sql: re.sub(r'(?:ibis_)?_?memtable_[A-Za-z0-9_]+', 'memtable_NORMALIZED', str(sql))
+        assert normalize_sql(legacy_sql) == normalize_sql(current_sql)
+
+    def test_median_decompose_module_backward_compatibility(self):
+        """Legacy submodule import should still expose median_decompose."""
+        current = traffic_anomaly.decompose(
+            self.vehicle_counts,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            rolling_window_enable=False
+        )
+        legacy = median_decompose_from_module(
+            self.vehicle_counts,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            rolling_window_enable=False
+        )
+
+        self._compare_dataframes(legacy, current, "median_decompose_module_backward_compatibility")
     
     def test_anomaly_basic(self):
         """Test anomaly basic functionality against precalculated results"""
@@ -232,6 +295,72 @@ class TestTrafficAnomaly:
         
         # Compare results
         self._compare_dataframes(anomaly3, expected, "anomaly_with_geh")
+
+    def test_find_anomaly_backward_compatibility(self):
+        """Legacy find_anomaly wrapper should match anomaly output."""
+        decomp = traffic_anomaly.decompose(
+            self.vehicle_counts,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            rolling_window_enable=False
+        )
+
+        current = traffic_anomaly.anomaly(
+            decomposed_data=decomp,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            entity_threshold=6.0,
+            GEH=True,
+            MAD=False,
+            log_adjust_negative=True,
+        )
+        legacy = traffic_anomaly.find_anomaly(
+            decomposed_data=decomp,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            entity_threshold=6.0,
+            GEH=True,
+            MAD=False,
+            log_adjust_negative=True,
+        )
+
+        self._compare_dataframes(legacy, current, "find_anomaly_backward_compatibility")
+
+    def test_find_anomaly_module_backward_compatibility(self):
+        """Legacy submodule import should still expose find_anomaly."""
+        decomp = traffic_anomaly.decompose(
+            self.vehicle_counts,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            rolling_window_enable=False
+        )
+
+        current = traffic_anomaly.anomaly(
+            decomposed_data=decomp,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            entity_threshold=6.0,
+            GEH=True,
+            MAD=False,
+            log_adjust_negative=True,
+        )
+        legacy = find_anomaly_from_module(
+            decomposed_data=decomp,
+            datetime_column='timestamp',
+            value_column='total',
+            entity_grouping_columns=['intersection', 'detector'],
+            entity_threshold=6.0,
+            GEH=True,
+            MAD=False,
+            log_adjust_negative=True,
+        )
+
+        self._compare_dataframes(legacy, current, "find_anomaly_module_backward_compatibility")
 
     def test_anomaly_with_connectivity_originated(self):
         """Test anomaly with connectivity_table (originated anomalies) against precalculated results"""
