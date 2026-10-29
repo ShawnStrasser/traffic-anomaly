@@ -1,33 +1,23 @@
-import ibis
-from ibis import _
 from typing import Union, List, Any
 import warnings
-# Note: This function accepts ibis.Expr or pandas.DataFrame as input
-# pandas is not required - ibis.memtable() can handle pandas DataFrames if pandas is available
 
+import duckdb
 
-def _validate_columns(table: ibis.Expr, datetime_column: str, value_column: str, entity_grouping_columns: List[str]) -> None:
-    """Validate that required columns exist in the table."""
-    missing_columns = []
-    
-    if datetime_column not in table.columns:
-        missing_columns.append(datetime_column)
-    if value_column not in table.columns:
-        missing_columns.append(value_column)
-    
-    for col in entity_grouping_columns:
-        if col not in table.columns:
-            missing_columns.append(col)
-    
-    if missing_columns:
-        raise ValueError(f"Missing required columns: {missing_columns}")
+from ._sql import Source, quote, columns, number, interval
 
-    if not table[datetime_column].type().is_temporal():
-        raise TypeError(f"Column '{datetime_column}' must be a temporal type (e.g., timestamp or date), but is {table[datetime_column].type()}")
+# Components added to the output, in order. median, season_day and season_week are dropped by drop_extras.
+_COMPONENTS = {
+    'median': '__ta_median',
+    'season_day': '__ta_season_day',
+    'season_week': '__ta_season_week',
+    'resid': '(__ta_detrend - __ta_season_day) - __ta_season_week',
+    'prediction': 'GREATEST(__ta_median + __ta_season_day + __ta_season_week, 0)',
+}
+_EXTRAS = ('median', 'season_day', 'season_week')
 
 
 def decompose(
-    data: Union[ibis.Expr, Any],  # ibis.Expr or pandas.DataFrame
+    data: Union[str, duckdb.DuckDBPyRelation, Any],  # table name, DuckDB relation or pandas DataFrame
     datetime_column: str = 'timestamp',
     value_column: str = 'value',
     entity_grouping_columns: List[str] = None,
@@ -39,13 +29,14 @@ def decompose(
     rolling_window_enable: bool = True,
     drop_extras: bool = True,
     return_sql: bool = False,
-    dialect = None
-) -> Union[ibis.Expr, Any, str]:  # ibis.Expr, pandas.DataFrame, or str
+    conn: duckdb.DuckDBPyConnection = None
+) -> Union[duckdb.DuckDBPyRelation, Any, str]:  # DuckDB relation, pandas DataFrame, or str
     """
     Decomposes a time series dataset into rolling median, seasonal (day and week), and residual components.
 
     Args:
-        data: The time series data to decompose. Must be an ibis.Expr or pandas.DataFrame.
+        data: The time series data to decompose. A pandas DataFrame (or anything else DuckDB can read, such as
+              an Arrow table), a DuckDB relation, or the name of a table or view in conn.
         datetime_column: The name of the column containing datetime information.
         value_column: The name of the column containing the values to be decomposed.
         entity_grouping_columns: List of column names to group by.
@@ -57,8 +48,10 @@ def decompose(
         rolling_window_enable: Whether to enable the rolling window functionality.
                               If False, disables all rolling functions, including drop days, and uses a static median.
         drop_extras: Whether to drop extra columns from the result.
-        return_sql: Whether to return the result as an SQL query string.
-        dialect: Option to output a specific SQL dialect when return_sql=True
+        return_sql: Whether to return the DuckDB SQL query instead of the result. Requires data to be a table
+                    or view name; the query reads it by that name.
+        conn: The DuckDB connection holding the table or view named by data. Defaults to DuckDB's default
+              connection (the one duckdb.sql() uses). Not used for DataFrames or relations.
 
     Returns:
         The decomposed time series data with the following columns:
@@ -70,12 +63,10 @@ def decompose(
             - season_week: The weekly seasonal component.
             - resid: The residual component.
             - prediction: The predicted value (median + season_day + season_week).
+        A pandas DataFrame if data was a DataFrame, otherwise a lazy DuckDB relation in the same connection.
         If return_sql is True, returns the SQL query string instead.
-        Returns ibis.Expr if input was ibis.Expr, pandas.DataFrame if input was pandas.DataFrame.
 
     Notes:
-        - The function supports both pandas DataFrame and Ibis table expressions as input.
-        - pandas is not required as a dependency - ibis.memtable() can handle pandas DataFrames if pandas is available.
         - The rolling window functionality can be disabled by setting rolling_window_enable to False.
         - If rolling_window_enable is True, the function filters out rows with insufficient samples in the rolling window
           and drops the specified number of days from the beginning of the dataset.
@@ -87,96 +78,81 @@ def decompose(
     # Set default for mutable parameter
     if entity_grouping_columns is None:
         entity_grouping_columns = ['id']
-    
+
     # Validate parameter types
     if not isinstance(entity_grouping_columns, list):
         raise ValueError('entity_grouping_columns must be a list.')
-    
-    # Check if data is an Ibis table
-    if isinstance(data, ibis.Expr):
-        table = data
-    else:
-        # Assume it's a pandas DataFrame or similar tabular data
-        try:
-            table = ibis.memtable(data)
-        except Exception as e:
-            raise ValueError('Invalid data type. Please provide a valid Ibis table or pandas DataFrame.')
 
-    # Validate required columns exist
-    _validate_columns(table, datetime_column, value_column, entity_grouping_columns)
+    source = Source(data, conn, return_sql, datetime_column, value_column, entity_grouping_columns)
 
-    window = ibis.window(
-        group_by=entity_grouping_columns,
-        order_by=datetime_column,
-        preceding=ibis.interval(days=rolling_window_days),
-        following=0
-    )
+    dt, value = quote(datetime_column), quote(value_column)
+    entity = columns(entity_grouping_columns)
 
     if rolling_window_enable:
-        result = (
-            table
-            .mutate(
-                rolling_row_count=_.count().over(window).cast('int16'),
-                median=_[value_column].median().over(window).cast('float32')
+        trend = f"""
+        trend AS (
+            SELECT *,
+                COUNT(*) OVER rolling AS __ta_rolling_row_count,
+                CAST(QUANTILE_CONT({value}, 0.5) OVER rolling AS REAL) AS __ta_median
+            FROM {source.table}
+            WINDOW rolling AS (
+                PARTITION BY {entity} ORDER BY {dt}
+                RANGE BETWEEN {interval(rolling_window_days, 'DAY')} PRECEDING AND CURRENT ROW
             )
-            .filter(_[datetime_column] >= _[datetime_column].min() + ibis.interval(days=drop_days))
-        )
+        ),
+        trimmed AS (
+            SELECT * FROM trend
+            WHERE {dt} >= (SELECT MIN({dt}) FROM trend) + {interval(drop_days, 'DAY')}
+        ),"""
+        trended = 'trimmed'
+        keep = f'__ta_rolling_row_count >= {number(min_rolling_window_samples)} AND '
     else:
-        result = (
-            table
-            .group_by(entity_grouping_columns)
-            .mutate(median=_[value_column].median().cast('float32'))
-        )
+        trend = f"""
+        trend AS (
+            SELECT *, CAST(QUANTILE_CONT({value}, 0.5) OVER (PARTITION BY {entity}) AS REAL) AS __ta_median
+            FROM {source.table}
+        ),"""
+        trended = 'trend'
+        keep = ''
 
-    result = (
-        result
-        .mutate(
-            detrend=_[value_column] - _.median,
-            time_of_day=((_[datetime_column].hour() * 60 + _[datetime_column].minute()) / freq_minutes + 1).cast('int16'),
-            day_of_week=_[datetime_column].day_of_week.index(),
-        )
-        .group_by(entity_grouping_columns + [_.time_of_day])
-        .mutate(season_day=_.detrend.median().cast('float32'),
-                time_of_day_count=_.count().cast('int16'))
-        .group_by(entity_grouping_columns + [_.day_of_week, _.time_of_day])
-        .mutate(season_week=(_.detrend - _.season_day).median().cast('float32'))
-        .mutate(resid=_.detrend - _.season_day - _.season_week,
-                prediction=ibis.greatest(_.median + _.season_day + _.season_week, 0))
+    # Input columns keep their place (a component with the same name replaces them), new components follow
+    select = []
+    for col in source.columns:
+        if drop_extras and col in _EXTRAS:
+            continue
+        select.append(f'{_COMPONENTS[col]} AS {quote(col)}' if col in _COMPONENTS else quote(col))
+    for col, expr in _COMPONENTS.items():
+        if col not in source.columns and not (drop_extras and col in _EXTRAS):
+            select.append(f'{expr} AS {quote(col)}')
+
+    sql = f"""
+    WITH {trend}
+    detrended AS (
+        SELECT *,
+            {value} - __ta_median AS __ta_detrend,
+            CAST((EXTRACT(hour FROM {dt}) * 60 + EXTRACT(minute FROM {dt})) / {number(freq_minutes)} + 1 AS SMALLINT)
+                AS __ta_time_of_day,
+            (DAYOFWEEK({dt}) + 6) % 7 AS __ta_day_of_week
+        FROM {trended}
+    ),
+    season_day AS (
+        SELECT *,
+            CAST(QUANTILE_CONT(__ta_detrend, 0.5) OVER time_of_day AS REAL) AS __ta_season_day,
+            COUNT(*) OVER time_of_day AS __ta_time_of_day_count
+        FROM detrended
+        WINDOW time_of_day AS (PARTITION BY {entity}, __ta_time_of_day)
+    ),
+    season_week AS (
+        SELECT *,
+            CAST(QUANTILE_CONT(__ta_detrend - __ta_season_day, 0.5)
+                OVER (PARTITION BY {entity}, __ta_day_of_week, __ta_time_of_day) AS REAL) AS __ta_season_week
+        FROM season_day
     )
-
-    if rolling_window_enable:
-        result = (
-            result
-            .filter(_.rolling_row_count >= min_rolling_window_samples)
-            .drop('rolling_row_count')
-        )
-    
-    result = (
-        result
-        .filter(_.time_of_day_count >= min_time_of_day_samples)
-        .drop('detrend', 'time_of_day', 'day_of_week', 'time_of_day_count')
-    )
-
-    if drop_extras:
-        result = result.drop('median', 'season_day', 'season_week')
-
-    if return_sql:
-        return ibis.to_sql(result, dialect=dialect)
-    elif isinstance(data, ibis.Expr):
-        return result  # Return Ibis expression directly if input was Ibis
-    else:
-        # Force explicit column projection to prevent schema mismatch errors.
-        # Ibis/DuckDB optimization can convert column selections to SELECT *,
-        # which may include dropped intermediate columns. This workaround applies
-        # a no-op (+0.0) to force expression generation in the final projection.
-        # See issue #12.
-        result = result.select(
-            *[
-                (result[c] + 0.0).cast(result[c].type()).name(c) if c == 'prediction' else result[c]
-                for c in result.columns
-            ]
-        )
-        return result.execute()
+    SELECT {', '.join(select)}
+    FROM season_week
+    WHERE {keep}__ta_time_of_day_count >= {number(min_time_of_day_samples)}
+    """
+    return source.result(sql)
 
 
 def median_decompose(*args, to_sql: bool = False, **kwargs):

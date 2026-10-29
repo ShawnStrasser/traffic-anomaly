@@ -1,36 +1,16 @@
-import ibis
-from ibis import _
 from typing import Union, List, Any
-# Note: This function accepts ibis.Expr or pandas.DataFrame as input
-# pandas is not required - ibis.memtable() can handle pandas DataFrames if pandas is available
+
+import duckdb
+
+from ._sql import Source, quote, columns, number, interval
 
 SECONDS_PER_DAY = 86400
-EPSILON = 1e-6
-
-def _validate_columns(table: ibis.Expr, datetime_column: str, value_column: str, entity_grouping_column: Union[str, List[str]]) -> None:
-    """Validate that required columns exist in the table."""
-    missing_columns = []
-    
-    if datetime_column not in table.columns:
-        missing_columns.append(datetime_column)
-    if value_column not in table.columns:
-        missing_columns.append(value_column)
-    
-    # Handle single string or list of strings for entity_grouping_column
-    grouping_columns = [entity_grouping_column] if isinstance(entity_grouping_column, str) else entity_grouping_column
-    for col in grouping_columns:
-        if col not in table.columns:
-            missing_columns.append(col)
-    
-    if missing_columns:
-        raise ValueError(f"Missing required columns: {missing_columns}")
-
-    if not table[datetime_column].type().is_temporal():
-        raise TypeError(f"Column '{datetime_column}' must be a temporal type (e.g., timestamp or date), but is {table[datetime_column].type()}")
+EPSILON = '1e-06'
 
 
-def _calculate_changepoints_core(
-    table: ibis.Expr,
+def _changepoints_sql(
+    prefix: str,
+    table: str,
     datetime_column: str,
     value_column: str,
     grouping_columns: List[str],
@@ -41,259 +21,132 @@ def _calculate_changepoints_core(
     score_threshold: float,
     min_separation_days: int,
     min_samples: int
-) -> ibis.Expr:
-    """Core changepoint calculation logic."""
+) -> List[str]:
+    """Common table expressions finding the changepoints in table. The last one, {prefix}changepoints, holds them."""
+    p = prefix
+    dt, value = quote(datetime_column), quote(value_column)
+    group = columns(grouping_columns)
+    on_group = lambda a, b: ' AND '.join(f'{a}.{quote(col)} = {b}.{quote(col)}' for col in grouping_columns)
+
     # Calculate intervals once for reuse throughout the function
     half_days = rolling_window_days // 2
-    half_window_secs_minus_1 = (half_days * SECONDS_PER_DAY) - 1
-    min_separation_secs_minus_1 = (min_separation_days * SECONDS_PER_DAY) - 1
-    
+    half_window = interval(half_days * SECONDS_PER_DAY - 1, 'SECOND')
+    windows = f"""
+        before AS (PARTITION BY {group} ORDER BY {dt} RANGE BETWEEN {half_window} PRECEDING AND CURRENT ROW),
+        after AS (PARTITION BY {group} ORDER BY {dt} RANGE BETWEEN CURRENT ROW AND {half_window} FOLLOWING),
+        combined AS (PARTITION BY {group} ORDER BY {dt}
+            RANGE BETWEEN {interval(half_days, 'DAY')} PRECEDING AND {half_window} FOLLOWING)"""
+
     # Shift value_column forward for the left window
-    table = table.mutate(
-        lag_column=_[value_column].lag(1).over(
-            ibis.window(group_by=grouping_columns, order_by=datetime_column)
-        )
-    )
+    ctes = [f"""
+    {p}lagged AS (
+        SELECT {group}, {dt}, {value}, LAG({value}) OVER (PARTITION BY {group} ORDER BY {dt}) AS lag_column
+        FROM {table}
+    )"""]
 
-    # Create windows for each variance calculation
-    left_window = ibis.window(
-        group_by=grouping_columns,
-        order_by=datetime_column,
-        preceding=ibis.interval(seconds=half_window_secs_minus_1),  # subtract epsilon in the literal
-        following=0
-    )
-
-    right_window = ibis.window(
-        group_by=grouping_columns,
-        order_by=datetime_column,
-        preceding=0,
-        following=ibis.interval(seconds=half_window_secs_minus_1)
-    )
-
-    combined_window = ibis.window(
-        group_by=grouping_columns,
-        order_by=datetime_column,
-        preceding=ibis.interval(days=half_days),
-        following=ibis.interval(seconds=half_window_secs_minus_1)
-    )
-    
     if robust:
-        # Winsorized variance calculation
-        # Step 1: Add row numbers for joining
-        table_with_rn = table.mutate(
-            row_num=ibis.row_number().over(
-                ibis.window(group_by=grouping_columns, order_by=datetime_column)
-            )
-        )
-
-        # Step 2: Calculate quantiles for each window
-        table_with_quantiles = table_with_rn.mutate(
-            # Left window quantiles
-            left_lower=_['lag_column'].quantile(lower_bound).over(left_window),
-            left_upper=_['lag_column'].quantile(upper_bound).over(left_window),
-            
-            # Right window quantiles  
-            right_lower=_[value_column].quantile(lower_bound).over(right_window),
-            right_upper=_[value_column].quantile(upper_bound).over(right_window),
-            
-            # Combined window quantiles
-            combined_lower=_[value_column].quantile(lower_bound).over(combined_window),
-            combined_upper=_[value_column].quantile(upper_bound).over(combined_window)
-        )
-
-        # Step 3: Optimized winsorized variance calculation using a single comprehensive join
-        # Instead of 3 separate joins, we do one join and compute all variances together
-        center = table_with_quantiles.alias('center')
-        neighbor = table_with_quantiles.alias('neighbor')
-
-        # Single join for all window relationships
-        join_conditions_all = [
-            neighbor[datetime_column] >= (center[datetime_column] - ibis.interval(days=half_days)),
-            neighbor[datetime_column] <= (center[datetime_column] + ibis.interval(seconds=half_window_secs_minus_1))
-        ]
-        # Add grouping column conditions
-        for col in grouping_columns:
-            join_conditions_all.append(center[col] == neighbor[col])
-            
-        all_pairs = center.join(
-            neighbor,
-            join_conditions_all
-        ).select(
-            center_row=center['row_num'],
-            center_date=center[datetime_column],
-            neighbor_date=neighbor[datetime_column],
-            **{f'center_{col}': center[col] for col in grouping_columns},
-            # All quantiles needed for clipping
-            left_lower=center['left_lower'],
-            left_upper=center['left_upper'],
-            right_lower=center['right_lower'],
-            right_upper=center['right_upper'],
-            combined_lower=center['combined_lower'],
-            combined_upper=center['combined_upper'],
-            neighbor_value=neighbor[value_column]
-        ).mutate(
-            # Determine which window each neighbor belongs to
-            is_left=_['neighbor_date'] < _['center_date'],
-            is_right=_['neighbor_date'] > _['center_date'],
-            is_combined=_['neighbor_date'] != _['center_date']
-        ).mutate(
-            # Clip values for each window type using the new ibis.cases() function
-            left_clipped=ibis.cases(
-                (_['is_left'], _['neighbor_value'].clip(_['left_lower'], _['left_upper'])),
-                else_=None
-            ),
-            right_clipped=ibis.cases(
-                (_['is_right'], _['neighbor_value'].clip(_['right_lower'], _['right_upper'])),
-                else_=None
-            ),
-            combined_clipped=ibis.cases(
-                (_['is_combined'], _['neighbor_value'].clip(_['combined_lower'], _['combined_upper'])),
-                else_=None
-            )
-        )
-        
-        # Aggregate variances for all windows in one operation
-        all_variances = all_pairs.group_by(
-            ['center_row', 'center_date'] + [f'center_{col}' for col in grouping_columns]
-        ).aggregate(
-            Left_Var=_['left_clipped'].var(),
-            Right_Var=_['right_clipped'].var(),
-            Combined_Var=_['combined_clipped'].var()
-        )
-
-        # Step 4: Join variance results back (single join instead of three)
-        base_table = table_with_quantiles.drop([
-            'left_lower', 'left_upper', 'right_lower', 'right_upper', 
-            'combined_lower', 'combined_upper'
-        ])
-
-        # Single join with all variance results
-        variance_join_conditions = [
-            base_table['row_num'] == all_variances['center_row'],
-            base_table[datetime_column] == all_variances['center_date']
-        ]
-        for col in grouping_columns:
-            variance_join_conditions.append(base_table[col] == all_variances[f'center_{col}'])
-            
-        result = base_table.join(
-            all_variances,
-            variance_join_conditions,
-            how='left'
-        ).select(base_table, 'Left_Var', 'Right_Var', 'Combined_Var').drop('row_num')
-        
+        # Winsorized variance: each window's values clipped to that window's quantiles
+        lower, upper = number(lower_bound), number(upper_bound)
+        def clipped(side, condition):
+            return (f"CASE WHEN {condition} AND n.{value} IS NOT NULL "
+                    f"THEN GREATEST(c.{side}_lower, LEAST(c.{side}_upper, n.{value})) END AS {side}_clipped")
+        ctes.append(f"""
+    {p}quantiles AS (
+        SELECT *,
+            ROW_NUMBER() OVER (PARTITION BY {group} ORDER BY {dt}) AS row_num,
+            QUANTILE_CONT(lag_column, {lower}) OVER before AS left_lower,
+            QUANTILE_CONT(lag_column, {upper}) OVER before AS left_upper,
+            QUANTILE_CONT({value}, {lower}) OVER after AS right_lower,
+            QUANTILE_CONT({value}, {upper}) OVER after AS right_upper,
+            QUANTILE_CONT({value}, {lower}) OVER combined AS combined_lower,
+            QUANTILE_CONT({value}, {upper}) OVER combined AS combined_upper
+        FROM {p}lagged
+        WINDOW {windows}
+    ),
+    {p}robust_variances AS (
+        SELECT row_num, {group}, {dt},
+            VARIANCE(left_clipped) AS left_var,
+            VARIANCE(right_clipped) AS right_var,
+            VARIANCE(combined_clipped) AS combined_var
+        FROM (
+            SELECT c.row_num, {columns(grouping_columns, 'c')}, c.{dt},
+                {clipped('left', f'n.{dt} < c.{dt}')},
+                {clipped('right', f'n.{dt} > c.{dt}')},
+                {clipped('combined', f'n.{dt} <> c.{dt}')}
+            FROM {p}quantiles c
+            JOIN {p}quantiles n
+              ON n.{dt} >= c.{dt} - {interval(half_days, 'DAY')}
+             AND n.{dt} <= c.{dt} + {half_window}
+             AND {on_group('c', 'n')}
+        ) pairs
+        GROUP BY row_num, {group}, {dt}
+    ),
+    {p}variances AS (
+        SELECT q.* EXCLUDE (row_num, left_lower, left_upper, right_lower, right_upper, combined_lower, combined_upper),
+            v.left_var, v.right_var, v.combined_var
+        FROM {p}quantiles q
+        LEFT JOIN {p}robust_variances v ON q.row_num = v.row_num AND q.{dt} = v.{dt} AND {on_group('q', 'v')}
+    )""")
     else:
-        # Standard variance calculation
-        result = table.mutate(
-            Left_Var=_['lag_column'].var().over(left_window),
-            Right_Var=_[value_column].var().over(right_window),
-            Combined_Var=_[value_column].var().over(combined_window)
-        )
-    
-    #####################################################################
-    ##################### Calculate scores ##############################
-    #####################################################################
+        ctes.append(f"""
+    {p}variances AS (
+        SELECT *,
+            VARIANCE(lag_column) OVER before AS left_var,
+            VARIANCE({value}) OVER after AS right_var,
+            VARIANCE({value}) OVER combined AS combined_var
+        FROM {p}lagged
+        WINDOW {windows}
+    )""")
 
-    # Calculate min and max timestamps for each entity to identify window boundaries
-    entity_bounds = table.group_by(grouping_columns).aggregate(
-        min_ts=table[datetime_column].min(),
-        max_ts=table[datetime_column].max()
-    )
-
-    # Join entity bounds back to the results
-    joined_result = result.join(entity_bounds, grouping_columns, how='left')
-    result = joined_result.select(result, 'min_ts', 'max_ts')
-
-    # Add cost and score columns, making score NaN if the window is incomplete
-    half_window_interval = ibis.interval(days=half_days)
-    result = result.mutate(
-        Combined_Cost=(20 * (result['Combined_Var'] + EPSILON).ln()),
-        Left_Cost=(10 * (result['Left_Var'] + EPSILON).ln()),
-        Right_Cost=(10 * (result['Right_Var'] + EPSILON).ln())
-    )
-    
-    # Check window boundaries to ensure we have complete windows
-    window_condition = (
-        (result[datetime_column] >= result['min_ts'] + half_window_interval) &
-        (result[datetime_column] <= result['max_ts'] - half_window_interval)
-    )
-    
-    # Create windows for sample counting (reuse these later for averages)
-    sample_window_before = ibis.window(
-        group_by=grouping_columns,
-        order_by=datetime_column,
-        preceding=ibis.interval(seconds=half_window_secs_minus_1),
-        following=0
-    )
-    sample_window_after = ibis.window(
-        group_by=grouping_columns,
-        order_by=datetime_column,
-        preceding=0,
-        following=ibis.interval(seconds=half_window_secs_minus_1)
-    )
-    
-    result = result.mutate(
-        sample_count_before=result[value_column].count().over(sample_window_before),
-        sample_count_after=result[value_column].count().over(sample_window_after)
-    ).mutate(
-        score=(window_condition & 
-               (_.sample_count_before >= min_samples) & 
-               (_.sample_count_after >= min_samples)).ifelse(
-            result['Combined_Cost'] - result['Left_Cost'] - result['Right_Cost'],
-            0
-        )
-    # Add score lag column
-    ).mutate(
-        score_lag=_.score.lag(1).over(ibis.window(group_by=grouping_columns, order_by=datetime_column))
-    ).drop('sample_count_before', 'sample_count_after')
-
-    # Clean up intermediate columns and create scores table
-    scores_table = result.drop([
-        'Left_Cost', 'Right_Cost', 'Combined_Cost', 
-        'Left_Var', 'Right_Var', 'Combined_Var', 'min_ts', 'max_ts'
-    ]).order_by(_[datetime_column])
-
-    # Create windows for peak detection
-    peak_window = ibis.window(
-        group_by=grouping_columns,
-        order_by=datetime_column,
-        preceding=ibis.interval(days=min_separation_days),
-        following=ibis.interval(days=min_separation_days)
-    )
-    window_before_peak = ibis.window(
-        group_by=grouping_columns,
-        order_by=datetime_column,
-        preceding=ibis.interval(seconds=min_separation_secs_minus_1), #added because values will be shifted forward to remove the current row
-        following=0
-    )
-
-    changepoints = scores_table.mutate(
-        avg_before=(_['lag_column'].mean().over(sample_window_before)),
-        avg_after=(_[value_column].mean().over(sample_window_after)),
-        is_local_peak=(
-            (_.score == _.score.max().over(peak_window)) & (_.score > score_threshold) &
-            # Tie breaker that selects first row if there are multiple with the same max score
-            (_.score > _.score_lag.max().over(window_before_peak))
-        ),
-    )
-
-    # Filter to local peaks (score > 0 ensures both window boundary and min_samples were met)
-    changepoints = changepoints.filter(changepoints['is_local_peak'] & (changepoints['score'] > 0))
-    changepoints = changepoints.mutate(
-        avg_diff=changepoints['avg_after'] - changepoints['avg_before'],
-        pct_change=((changepoints['avg_after'] - changepoints['avg_before']) / 
-                   ibis.greatest(changepoints['avg_before'].abs(), EPSILON))
-    )
-
-    # Select relevant columns
-    final_result = changepoints.select(
-        grouping_columns + [datetime_column, 'score', 'avg_before', 'avg_after', 'avg_diff', 'pct_change']
-    ).order_by(grouping_columns + [datetime_column])
-    
-    return final_result
+    # Score each point, leaving it at 0 unless both windows are complete and hold at least min_samples values
+    min_separation = interval(min_separation_days, 'DAY')
+    ctes.append(f"""
+    {p}bounded AS (
+        SELECT v.*, b.min_ts, b.max_ts
+        FROM {p}variances v
+        LEFT JOIN (
+            SELECT {group}, MIN({dt}) AS min_ts, MAX({dt}) AS max_ts FROM {p}lagged GROUP BY {group}
+        ) b ON {on_group('v', 'b')}
+    ),
+    {p}scores AS (
+        SELECT * EXCLUDE (min_ts, max_ts),
+            CASE WHEN {dt} >= min_ts + {interval(half_days, 'DAY')}
+                  AND {dt} <= max_ts - {interval(half_days, 'DAY')}
+                  AND COUNT({value}) OVER before >= {number(min_samples)}
+                  AND COUNT({value}) OVER after >= {number(min_samples)}
+                THEN (LN(combined_var + {EPSILON}) * 20 - LN(left_var + {EPSILON}) * 10) - LN(right_var + {EPSILON}) * 10
+                ELSE 0
+            END AS score
+        FROM {p}bounded
+        WINDOW {windows}
+    ),
+    {p}peaks AS (
+        SELECT *,
+            AVG(lag_column) OVER before AS avg_before,
+            AVG({value}) OVER after AS avg_after,
+            (score = MAX(score) OVER (PARTITION BY {group} ORDER BY {dt}
+                    RANGE BETWEEN {min_separation} PRECEDING AND {min_separation} FOLLOWING))
+                AND (score > {number(score_threshold)})
+                -- Tie breaker that selects first row if there are multiple with the same max score
+                AND (score > MAX(score_lag) OVER (PARTITION BY {group} ORDER BY {dt}
+                    RANGE BETWEEN {interval(min_separation_days * SECONDS_PER_DAY - 1, 'SECOND')} PRECEDING AND CURRENT ROW))
+                AS is_local_peak
+        FROM (SELECT *, LAG(score) OVER (PARTITION BY {group} ORDER BY {dt}) AS score_lag FROM {p}scores)
+        WINDOW {windows}
+    ),
+    {p}changepoints AS (
+        -- score > 0 ensures both window boundary and min_samples were met
+        SELECT {group}, {dt}, score, avg_before, avg_after,
+            avg_after - avg_before AS avg_diff,
+            (avg_after - avg_before) / GREATEST(ABS(avg_before), {EPSILON}) AS pct_change
+        FROM {p}peaks
+        WHERE is_local_peak AND score > 0
+    )""")
+    return ctes
 
 
 def changepoint(
-    data: Union[ibis.Expr, Any],  # ibis.Expr or pandas.DataFrame
+    data: Union[str, duckdb.DuckDBPyRelation, Any],  # table name, DuckDB relation or pandas DataFrame
     datetime_column: str,
     value_column: str,
     entity_grouping_column: Union[str, List[str]],
@@ -306,28 +159,29 @@ def changepoint(
     min_samples: int = 30,
     recent_days_for_validation: int = 0,
     return_sql: bool = False,
-    dialect = None
-) -> Union[ibis.Expr, Any, str]:  # ibis.Expr, pandas.DataFrame, or str
+    conn: duckdb.DuckDBPyConnection = None
+) -> Union[duckdb.DuckDBPyRelation, Any, str]:  # DuckDB relation, pandas DataFrame, or str
     """
     Detect changepoints in multivariate time series data using variance-based scoring.
-    
+
     This function identifies changepoints by comparing variance in windows before and after
     each time point. It can use either standard variance or robust (Winsorized) variance.
-    
+
     For optimal performance, when robust=True, the function first calculates changepoints using
     standard variance, then filters the dataset to only include regions around detected changepoints
     before performing the expensive robust variance calculation.
-    
+
     Parameters
     ----------
-    data : ibis.Expr or pandas.DataFrame
-        Input data containing time series with entities
-    value_column : str, default 'travel_time_seconds'
+    data : str, DuckDB relation or pandas DataFrame
+        Input data containing time series with entities: a pandas DataFrame (or anything else DuckDB can
+        read), a DuckDB relation, or the name of a table or view in conn
+    value_column : str
         Name of the column containing values to analyze
-    entity_grouping_column : str or list of str, default 'ID'
+    entity_grouping_column : str or list of str
         Name(s) of the column(s) containing entity identifiers for grouping.
         Can be a single column name (str) or multiple column names (list of str).
-    datetime_column : str, default 'TimeStamp'
+    datetime_column : str
         Name of the column containing timestamps
     rolling_window_days : int, default 14
         Size of the rolling window in days (total window size, split between before/after)
@@ -347,16 +201,19 @@ def changepoint(
     recent_days_for_validation : int, default 0
         Post-filter: length (in days) of the recent window per changepoint to average. Set to 0 to disable.
     return_sql : bool, default False
-        If True, return SQL query string instead of executing
-    dialect: Option to output a specific SQL dialect when return_sql=True
-        
+        If True, return the DuckDB SQL query instead of executing it. Requires data to be a table or view
+        name; the query reads it by that name.
+    conn : DuckDB connection, optional
+        The connection holding the table or view named by data. Defaults to DuckDB's default connection.
+        Not used for DataFrames or relations.
+
     Returns
     -------
-    ibis.Expr, pandas.DataFrame, or str
+    DuckDB relation, pandas DataFrame, or str
         If return_sql=True: SQL query string
-        If input was ibis.Expr: ibis.Expr containing changepoints
-        If input was pandas.DataFrame: pandas.DataFrame containing changepoints
-        
+        If data was a DataFrame: pandas DataFrame containing changepoints
+        Otherwise: lazy DuckDB relation containing changepoints, in the same connection
+
         Changepoints table contains columns:
         - entity_grouping_column: Entity identifier(s) (same column name(s) as input)
         - datetime_column: Timestamp of changepoint
@@ -365,7 +222,7 @@ def changepoint(
         - avg_after: Average value after changepoint
         - avg_diff: Difference between after and before averages
         - pct_change: Percent change from before to after averages
-        
+
     Raises
     ------
     ValueError
@@ -375,7 +232,7 @@ def changepoint(
     if not (0 <= upper_bound <= 1):
         raise ValueError("upper_bound must be between 0 and 1")
     if not (0 <= lower_bound <= 1):
-        raise ValueError("lower_bound must be between 0 and 1") 
+        raise ValueError("lower_bound must be between 0 and 1")
     if lower_bound >= upper_bound:
         raise ValueError("lower_bound must be less than upper_bound")
     if rolling_window_days <= 0:
@@ -389,104 +246,62 @@ def changepoint(
         raise ValueError("recent window days must be non-negative")
     if recent_window_days > rolling_window_days / 2:
         raise ValueError("recent window days must not exceed half the rolling window size")
-    
-    # Check if data is an Ibis table
-    if isinstance(data, ibis.Expr):
-        table = data
-    else:
-        try:
-            table = ibis.memtable(data)
-        except Exception as e:
-            raise ValueError('Invalid data type. Please provide a valid Ibis table or pandas DataFrame.')
-    
-    # Validate required columns exist
-    _validate_columns(table, datetime_column, value_column, entity_grouping_column)
-    
+
     # Normalize entity_grouping_column to always be a list
     grouping_columns = [entity_grouping_column] if isinstance(entity_grouping_column, str) else entity_grouping_column
+
+    source = Source(data, conn, return_sql, datetime_column, value_column, grouping_columns)
+
+    dt, value = quote(datetime_column), quote(value_column)
+    group = columns(grouping_columns)
+    on_group = lambda a, b: ' AND '.join(f'{a}.{quote(col)} = {b}.{quote(col)}' for col in grouping_columns)
+    params = (datetime_column, value_column, grouping_columns, rolling_window_days)
+    thresholds = (upper_bound, lower_bound, score_threshold, min_separation_days, min_samples)
 
     # Performance optimization for robust variance calculation:
     # First calculate changepoints using standard variance, then filter data for robust calculation
     if robust:
-        # Step 1: Get changepoints using standard variance (much faster)
-        standard_changepoints = _calculate_changepoints_core(
-            table, datetime_column, value_column, grouping_columns,
-            rolling_window_days, False, upper_bound, lower_bound,
-            score_threshold, min_separation_days, min_samples
-        )
-        
-        # Step 2: For each entity with changepoints, get the timestamp range
-        entity_ranges = standard_changepoints.group_by(grouping_columns).aggregate(
-            min_changepoint_ts=standard_changepoints[datetime_column].min(),
-            max_changepoint_ts=standard_changepoints[datetime_column].max()
-        )
-        
-        # Step 3: Calculate buffer intervals
-        buffer_interval = ibis.interval(days=rolling_window_days // 2 + min_separation_days)
-        
-        entity_ranges = entity_ranges.mutate(
-            start_filter_ts=_.min_changepoint_ts - buffer_interval,
-            end_filter_ts=_.max_changepoint_ts + buffer_interval
-        )
-        
-        # Step 4: Filter original data to only regions around changepoints
-        # If no changepoints exist, this join will result in an empty table naturally
-        filtered_table = table.join(entity_ranges, grouping_columns, how='inner').filter(
-            (_[datetime_column] >= _.start_filter_ts) & 
-            (_[datetime_column] <= _.end_filter_ts)
-        ).select(table)  # Keep only original table columns
-        
-        # Step 5: Run robust calculation on filtered data
-        final_result = _calculate_changepoints_core(
-            filtered_table, datetime_column, value_column, grouping_columns,
-            rolling_window_days, True, upper_bound, lower_bound,
-            score_threshold, min_separation_days, min_samples
-        )
+        # Get changepoints using standard variance (much faster), then keep each entity's data from
+        # a buffer before its first changepoint to a buffer after its last. Entities without
+        # changepoints drop out.
+        buffer = interval(rolling_window_days // 2 + min_separation_days, 'DAY')
+        ctes = _changepoints_sql('standard_', source.table, *params, False, *thresholds)
+        ctes.append(f"""
+    entity_ranges AS (
+        SELECT {group}, MIN({dt}) - {buffer} AS start_filter_ts, MAX({dt}) + {buffer} AS end_filter_ts
+        FROM standard_changepoints
+        GROUP BY {group}
+    ),
+    filtered AS (
+        SELECT t.*
+        FROM {source.table} t
+        JOIN entity_ranges r ON {on_group('t', 'r')}
+        WHERE t.{dt} >= r.start_filter_ts AND t.{dt} <= r.end_filter_ts
+    )""")
+        ctes += _changepoints_sql('', 'filtered', *params, True, *thresholds)
     else:
-        # Standard variance calculation (no filtering needed)
-        final_result = _calculate_changepoints_core(
-            table, datetime_column, value_column, grouping_columns,
-            rolling_window_days, False, upper_bound, lower_bound,
-            score_threshold, min_separation_days, min_samples
-        )
+        ctes = _changepoints_sql('', source.table, *params, False, *thresholds)
 
     # Optional post-filter: drop changepoints whose recent mean is closer to the pre-change baseline
     if recent_window_days > 0:
-        cp = final_result.alias('cp')
-        data_alias = table.alias('data')
-        recent_interval = ibis.interval(days=recent_window_days)
-
-        join_conditions = (
-            [cp[col] == data_alias[col] for col in grouping_columns] +
-            [
-                data_alias[datetime_column] >= cp[datetime_column],
-                data_alias[datetime_column] <= cp[datetime_column] + recent_interval
-            ]
-        )
-
-        recent_means = cp.join(data_alias, join_conditions, how='inner').group_by(
-            [cp[col] for col in grouping_columns] + [cp[datetime_column]]
-        ).aggregate(
-            avg_recent=data_alias[value_column].mean()
-        )
-
-        original_columns = final_result.columns
-        final_with_recent = final_result.join(recent_means, grouping_columns + [datetime_column], how='left')
-        final_with_recent = final_with_recent.mutate(
-            dist_before=(final_with_recent['avg_recent'] - final_with_recent['avg_before']).abs(),
-            dist_after=(final_with_recent['avg_recent'] - final_with_recent['avg_after']).abs()
-        ).mutate(
-            closer_to_before=ibis.coalesce(_.dist_before < _.dist_after, False)
-        )
-
-        final_result = final_with_recent.filter(~final_with_recent['closer_to_before']).drop(
-            ['avg_recent', 'dist_before', 'dist_after', 'closer_to_before']
-        ).select(original_columns)
-    
-    # Return results based on parameters
-    if return_sql:
-        return ibis.to_sql(final_result, dialect=dialect)
-    elif isinstance(data, ibis.Expr):
-        return final_result  # Return Ibis expression directly if input was Ibis
+        ctes.append(f"""
+    recent_means AS (
+        SELECT {columns(grouping_columns, 'cp')}, cp.{dt}, AVG(d.{value}) AS avg_recent
+        FROM changepoints cp
+        JOIN {source.table} d
+          ON {on_group('cp', 'd')}
+         AND d.{dt} >= cp.{dt}
+         AND d.{dt} <= cp.{dt} + {interval(recent_window_days, 'DAY')}
+        GROUP BY {columns(grouping_columns, 'cp')}, cp.{dt}
+    )""")
+        final = f"""
+    SELECT cp.*
+    FROM changepoints cp
+    LEFT JOIN recent_means r ON {on_group('cp', 'r')} AND cp.{dt} = r.{dt}
+    WHERE NOT COALESCE(ABS(r.avg_recent - cp.avg_before) < ABS(r.avg_recent - cp.avg_after), FALSE)
+    ORDER BY {columns(grouping_columns, 'cp')}, cp.{dt}"""
     else:
-        return final_result.execute()  # Convert to pandas (or similar) only for non-Ibis inputs
+        final = f"SELECT * FROM changepoints ORDER BY {group}, {dt}"
+
+    sql = f"WITH {','.join(ctes)}\n{final}"
+    return source.result(sql)

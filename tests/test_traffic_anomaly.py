@@ -2,9 +2,10 @@ import pytest
 import pandas as pd
 import numpy as np
 import os
-import re
 import sys
-import toml
+import tomllib
+
+import duckdb
 
 # Add the src directory to the path to import the package
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -36,8 +37,8 @@ class TestTrafficAnomaly:
         
         # Get version from pyproject.toml
         pyproject_path = os.path.join(self.project_root, 'pyproject.toml')
-        with open(pyproject_path, 'r') as f:
-            pyproject_data = toml.load(f)
+        with open(pyproject_path, 'rb') as f:
+            pyproject_data = tomllib.load(f)
         pyproject_version = pyproject_data['project']['version']
         
         assert init_version == pyproject_version, (
@@ -149,25 +150,29 @@ class TestTrafficAnomaly:
 
     def test_median_decompose_to_sql_backward_compatibility(self):
         """Legacy median_decompose should map to_sql to return_sql."""
+        conn = duckdb.connect()
+        conn.register('vehicle_counts', self.vehicle_counts.head(10))
         current_sql = traffic_anomaly.decompose(
-            self.vehicle_counts.head(10),
+            'vehicle_counts',
             datetime_column='timestamp',
             value_column='total',
             entity_grouping_columns=['intersection', 'detector'],
             rolling_window_enable=False,
-            return_sql=True
+            return_sql=True,
+            conn=conn
         )
         legacy_sql = traffic_anomaly.median_decompose(
-            self.vehicle_counts.head(10),
+            'vehicle_counts',
             datetime_column='timestamp',
             value_column='total',
             entity_grouping_columns=['intersection', 'detector'],
             rolling_window_enable=False,
-            to_sql=True
+            to_sql=True,
+            conn=conn
         )
 
-        normalize_sql = lambda sql: re.sub(r'(?:ibis_)?_?memtable_[A-Za-z0-9_]+', 'memtable_NORMALIZED', str(sql))
-        assert normalize_sql(legacy_sql) == normalize_sql(current_sql)
+        assert isinstance(current_sql, str)
+        assert legacy_sql == current_sql
 
     def test_median_decompose_module_backward_compatibility(self):
         """Legacy submodule import should still expose median_decompose."""
@@ -491,49 +496,6 @@ class TestTrafficAnomaly:
 
         self._compare_dataframes(changepoints_recent, expected, "changepoint_standard_recent_window")
     
-    # TODO: Uncomment when Snowflake-compatible ibis version is merged upstream
-    # def test_changepoint_sql_with_snowflake_dialect(self):
-    #     """Test changepoint detection with return_sql=True and dialect='snowflake'"""
-    #     # Load sample changepoint input data
-    #     df = sample_data.changepoints_input
-    #     
-    #     # Get SQL query with Snowflake dialect
-    #     sql_query = traffic_anomaly.changepoint(
-    #         df,
-    #         value_column='travel_time_seconds',
-    #         entity_grouping_column='ID',
-    #         datetime_column='TimeStamp',
-    #         score_threshold=0.7,
-    #         robust=True,
-    #         return_sql=True,
-    #         dialect="snowflake"
-    #     )
-    #     
-    #     # Verify that SQL query is returned as a string
-    #     assert isinstance(sql_query, str), "SQL query should be returned as a string"
-    #     assert len(sql_query) > 0, "SQL query should not be empty"
-    #     
-    #     # Verify that the SQL contains expected Snowflake-specific elements or standard SQL constructs
-    #     assert "SELECT" in sql_query.upper(), "SQL should contain SELECT statement"
-    #     assert "FROM" in sql_query.upper(), "SQL should contain FROM clause"
-    #     
-    #     # Test with standard parameters (robust=False) as well
-    #     sql_query_standard = traffic_anomaly.changepoint(
-    #         df,
-    #         value_column='travel_time_seconds',
-    #         entity_grouping_column='ID',
-    #         datetime_column='TimeStamp',
-    #         score_threshold=0.7,
-    #         robust=False,
-    #         return_sql=True,
-    #         dialect="snowflake"
-    #     )
-    #     
-    #     # Verify second query is also valid
-    #     assert isinstance(sql_query_standard, str), "Standard SQL query should be returned as a string"
-    #     assert len(sql_query_standard) > 0, "Standard SQL query should not be empty"
-    #     assert "SELECT" in sql_query_standard.upper(), "Standard SQL should contain SELECT statement"
-    
     def _compare_dataframes(self, actual, expected, test_name):
         """Helper method to compare two dataframes with detailed error reporting"""
         
@@ -631,126 +593,124 @@ class TestTrafficAnomaly:
                         )
 
     # Meaningful functional tests to verify correctness
+    @staticmethod
+    def _assert_same(actual, expected):
+        """Exact equality, ignoring row order (the queries do not define one)."""
+        columns = list(expected.columns)
+        actual = actual.sort_values(columns).reset_index(drop=True)
+        expected = expected.sort_values(columns).reset_index(drop=True)
+        pd.testing.assert_frame_equal(actual, expected, check_exact=True)
+
+    _DECOMPOSE = dict(datetime_column='timestamp', value_column='travel_time', entity_grouping_columns=['id'],
+                      rolling_window_days=3, drop_days=3, min_rolling_window_samples=10, drop_extras=False)
+    _ANOMALY = dict(datetime_column='timestamp', value_column='travel_time', entity_grouping_columns=['id'],
+                    entity_threshold=1.0)
+
+    def _chain_connectivity(self):
+        """Each segment flows into the next one, the last has no connectivity row, and NEXT_ID is upper case."""
+        ids = sorted(self.travel_times['id'].unique())
+        return pd.DataFrame({'id': ids[:-1], 'NEXT_ID': ids[1:]})
+
     def test_sql_execution_equivalence_decompose(self):
-        """Test that SQL output from decompose produces equivalent results when executed"""
-        import duckdb
-        import ibis
-        
-        # Use the same approach as the package code - ibis.memtable()
-        travel_times_table = ibis.memtable(self.travel_times)
-        
-        # Get regular result using Ibis table (same as package approach)
-        regular_result = traffic_anomaly.decompose(
-            data=travel_times_table,
-            datetime_column='timestamp',
-            value_column='travel_time',
-            entity_grouping_columns=['id'],
-            rolling_window_days=3,
-            drop_days=3,
-            min_rolling_window_samples=10,
-            drop_extras=False,
-            return_sql=False
-        ).execute()
-        
-        # Get SQL query using the same Ibis table
-        sql_query = traffic_anomaly.decompose(
-            data=travel_times_table,
-            datetime_column='timestamp',
-            value_column='travel_time',
-            entity_grouping_columns=['id'],
-            rolling_window_days=3,
-            drop_days=3,
-            min_rolling_window_samples=10,
-            drop_extras=False,
-            return_sql=True
-        )
-        
-        # Execute SQL with DuckDB using the original pandas data
+        """SQL returned for a table name, and the relation returned for it, match the DataFrame result"""
+        regular_result = traffic_anomaly.decompose(self.travel_times, **self._DECOMPOSE)
+
         conn = duckdb.connect()
         conn.register('travel_times', self.travel_times)
-        
-        # Replace the memtable reference in SQL with our registered table
-        # This is a bit hacky but works around the temporary table name issue
-        import re
-        # Find the memtable reference and replace with our registered table name
-        sql_with_table = re.sub(r'"ibis_pandas_memtable_[a-z0-9]+"', '"travel_times"', sql_query)
-        
-        sql_result = conn.execute(sql_with_table).fetchdf()
+        sql_query = traffic_anomaly.decompose('travel_times', return_sql=True, conn=conn, **self._DECOMPOSE)
+        assert isinstance(sql_query, str)
+        relation = traffic_anomaly.decompose('travel_times', conn=conn, **self._DECOMPOSE)
+        assert isinstance(relation, duckdb.DuckDBPyRelation)
+
+        self._assert_same(conn.sql(sql_query).df(), regular_result)
+        self._assert_same(relation.df(), regular_result)
         conn.close()
-        
-        # Compare results (allowing for small numerical differences)
-        assert regular_result.shape == sql_result.shape, "SQL and regular execution should produce same shape"
-        
-        # Compare key columns after sorting
-        for col in ['id', 'prediction']:
-            if col in regular_result.columns and col in sql_result.columns:
-                regular_sorted = regular_result.sort_values(['id', 'timestamp'])[col].reset_index(drop=True)
-                sql_sorted = sql_result.sort_values(['id', 'timestamp'])[col].reset_index(drop=True)
-                
-                if pd.api.types.is_numeric_dtype(regular_sorted):
-                    assert np.allclose(regular_sorted.fillna(0), sql_sorted.fillna(0), rtol=0.1), \
-                        f"SQL and regular results should match for {col}"
 
     def test_sql_execution_equivalence_anomaly(self):
-        """Test that SQL output from anomaly produces equivalent results when executed"""
-        import duckdb
-        import ibis
-        
-        # Use the same approach as the package code - ibis.memtable()
-        travel_times_table = ibis.memtable(self.travel_times)
-        
-        # First get decomposition using Ibis table (same as package approach)
-        decomp = traffic_anomaly.decompose(
-            data=travel_times_table,
-            datetime_column='timestamp',
-            value_column='travel_time',
-            entity_grouping_columns=['id'],
-            rolling_window_days=3,
-            drop_days=3,
-            min_rolling_window_samples=10,
-            drop_extras=False
-        )
-        
-        # Get both regular result and SQL using the same Ibis expression
-        regular_result = traffic_anomaly.anomaly(
-            decomposed_data=decomp,
-            datetime_column='timestamp',
-            value_column='travel_time',
-            entity_grouping_columns=['id'],
-            entity_threshold=2.0,
-            return_sql=False
-        ).execute()
-        
-        sql_query = traffic_anomaly.anomaly(
-            decomposed_data=decomp,
-            datetime_column='timestamp',
-            value_column='travel_time',
-            entity_grouping_columns=['id'],
-            entity_threshold=2.0,
-            return_sql=True
-        )
-        
-        # Execute SQL with DuckDB using the original pandas data
+        """anomaly SQL over a view of the decompose SQL matches the DataFrame results, connectivity included"""
+        decomp = traffic_anomaly.decompose(self.travel_times, **self._DECOMPOSE)
+        connectivity = self._chain_connectivity()
+        regular_result = traffic_anomaly.anomaly(decomp, connectivity_table=connectivity, **self._ANOMALY)
+        assert regular_result['originated_anomaly'].sum() > 0
+
         conn = duckdb.connect()
         conn.register('travel_times', self.travel_times)
-        
-        # Replace the memtable reference in SQL with our registered table
-        import re
-        sql_with_table = re.sub(r'"ibis_pandas_memtable_[a-z0-9]+"', '"travel_times"', sql_query)
-        
-        sql_result = conn.execute(sql_with_table).fetchdf()
+        conn.register('connectivity', connectivity)
+        decomp_sql = traffic_anomaly.decompose('travel_times', return_sql=True, conn=conn, **self._DECOMPOSE)
+        conn.execute(f"CREATE VIEW decomposed AS {decomp_sql}")
+        sql_query = traffic_anomaly.anomaly('decomposed', connectivity_table='connectivity', return_sql=True,
+                                            conn=conn, **self._ANOMALY)
+
+        self._assert_same(conn.sql(sql_query).df(), regular_result)
         conn.close()
-        
-        # Compare anomaly detection results
-        assert regular_result.shape == sql_result.shape, "SQL and regular execution should produce same shape"
-        
-        # Sort both for comparison
-        regular_sorted = regular_result.sort_values(['id', 'timestamp']).reset_index(drop=True)
-        sql_sorted = sql_result.sort_values(['id', 'timestamp']).reset_index(drop=True)
-        
-        # Compare anomaly column specifically
-        assert regular_sorted['anomaly'].equals(sql_sorted['anomaly']), \
-            "SQL and regular execution should produce identical anomaly flags"
+
+    def test_relation_input(self):
+        """DuckDB relations in, lazy relations out, matching the DataFrame path"""
+        conn = duckdb.connect()
+        relation = conn.from_df(self.travel_times)
+        decomp = traffic_anomaly.decompose(relation, **self._DECOMPOSE)
+        assert isinstance(decomp, duckdb.DuckDBPyRelation)
+        expected_decomp = traffic_anomaly.decompose(self.travel_times, **self._DECOMPOSE)
+        self._assert_same(decomp.df(), expected_decomp)
+
+        # The connectivity table can be a relation from the same connection or a DataFrame
+        connectivity = self._chain_connectivity()
+        expected = traffic_anomaly.anomaly(expected_decomp, connectivity_table=connectivity, **self._ANOMALY)
+        for conn_table in (conn.from_df(connectivity), connectivity):
+            result = traffic_anomaly.anomaly(decomp, connectivity_table=conn_table, **self._ANOMALY)
+            assert isinstance(result, duckdb.DuckDBPyRelation)
+            self._assert_same(result.df(), expected)
+
+        changepoints = traffic_anomaly.changepoint(conn.from_df(sample_data.changepoints_input), 'TimeStamp',
+                                                   'travel_time_seconds', 'ID', score_threshold=0.7, robust=True)
+        assert isinstance(changepoints, duckdb.DuckDBPyRelation)
+        pd.testing.assert_frame_equal(changepoints.df(), traffic_anomaly.changepoint(
+            sample_data.changepoints_input, 'TimeStamp', 'travel_time_seconds', 'ID', score_threshold=0.7, robust=True))
+        conn.close()
+
+    def test_changepoint_table_name(self):
+        """changepoint reads a table by name, in DuckDB's default connection unless conn is given"""
+        df = sample_data.changepoints_input
+        expected = traffic_anomaly.changepoint(df, 'TimeStamp', 'travel_time_seconds', 'ID', score_threshold=0.7,
+                                               recent_days_for_validation=3)
+        conn = duckdb.connect()
+        conn.register('changepoint_input', df)
+        sql_query = traffic_anomaly.changepoint('changepoint_input', 'TimeStamp', 'travel_time_seconds', 'ID',
+                                                score_threshold=0.7, recent_days_for_validation=3, return_sql=True,
+                                                conn=conn)
+        pd.testing.assert_frame_equal(conn.sql(sql_query).df(), expected)
+        conn.close()
+
+        duckdb.default_connection().register('ta_test_changepoint_input', df)
+        try:
+            result = traffic_anomaly.changepoint('ta_test_changepoint_input', 'TimeStamp', 'travel_time_seconds',
+                                                 'ID', score_threshold=0.7, recent_days_for_validation=3)
+            pd.testing.assert_frame_equal(result.df(), expected)
+        finally:
+            duckdb.default_connection().unregister('ta_test_changepoint_input')
+
+    def test_return_sql_requires_table_name(self):
+        """A DataFrame or relation has no name a returned query could read it by"""
+        with pytest.raises(ValueError, match="return_sql=True needs data given as the name of a table or view"):
+            traffic_anomaly.decompose(self.travel_times, return_sql=True, **self._DECOMPOSE)
+        with pytest.raises(ValueError, match="return_sql=True needs data given as the name of a table or view"):
+            traffic_anomaly.changepoint(duckdb.sql("SELECT 1 AS ID, now()::TIMESTAMP AS t, 1.0 AS v"),
+                                        't', 'v', 'ID', return_sql=True)
+
+    def test_connectivity_table_name_with_table_input(self):
+        """With a table name as input, the connectivity table must be a table in the same connection"""
+        conn = duckdb.connect()
+        conn.register('travel_times', self.travel_times)
+        decomp_sql = traffic_anomaly.decompose('travel_times', return_sql=True, conn=conn, **self._DECOMPOSE)
+        conn.execute(f"CREATE VIEW decomposed AS {decomp_sql}")
+        with pytest.raises(ValueError, match="connectivity_table must be a table name"):
+            traffic_anomaly.anomaly('decomposed', connectivity_table=self._chain_connectivity(), conn=conn,
+                                    **self._ANOMALY)
+        conn.close()
+
+    def test_no_ibis(self):
+        """The package runs on DuckDB alone"""
+        assert 'ibis' not in sys.modules
 
     def test_rolling_vs_static_decomposition(self):
         """Test functional difference between rolling and static decomposition"""
@@ -1037,8 +997,8 @@ class TestTrafficAnomaly:
 
     def test_decompose_invalid_data_type(self):
         """Test decompose with invalid data input types"""
-        # Test with invalid data type (not DataFrame or Ibis)
-        with pytest.raises(ValueError, match="Invalid data type. Please provide a valid Ibis table or pandas DataFrame"):
+        # A string is read as a table or view name
+        with pytest.raises(ValueError, match="Could not read table or view 'invalid_data_type'"):
             traffic_anomaly.decompose(
                 data="invalid_data_type",
                 datetime_column='timestamp',
@@ -1046,8 +1006,8 @@ class TestTrafficAnomaly:
                 entity_grouping_columns=['id']
             )
         
-        # Test with None - this actually gets converted to empty DataFrame by ibis, so it triggers missing columns error
-        with pytest.raises(ValueError, match="Missing required columns"):
+        # Test with None
+        with pytest.raises(ValueError, match="Invalid data type"):
             traffic_anomaly.decompose(
                 data=None,
                 datetime_column='timestamp',
@@ -1208,8 +1168,8 @@ class TestTrafficAnomaly:
 
     def test_anomaly_invalid_data_type(self):
         """Test anomaly detection with invalid data input types"""
-        # Test with invalid data type
-        with pytest.raises(ValueError, match="Invalid data type"):
+        # A string is read as a table or view name
+        with pytest.raises(ValueError, match="Could not read table or view 'invalid_data_type'"):
             traffic_anomaly.anomaly(
                 decomposed_data="invalid_data_type",
                 datetime_column='timestamp',
@@ -1391,8 +1351,8 @@ class TestTrafficAnomaly:
 
     def test_changepoint_invalid_data_type(self):
         """Test changepoint detection with invalid data input types"""
-        # Test with invalid data type
-        with pytest.raises(ValueError, match="Invalid data type. Please provide a valid Ibis table or pandas DataFrame"):
+        # A string is read as a table or view name
+        with pytest.raises(ValueError, match="Could not read table or view 'invalid_data_type'"):
             traffic_anomaly.changepoint(
                 data="invalid_data_type",
                 datetime_column='TimeStamp',
@@ -1400,8 +1360,8 @@ class TestTrafficAnomaly:
                 entity_grouping_column='ID'
             )
         
-        # Test with None - this actually gets converted to empty DataFrame by ibis, so it triggers missing columns error
-        with pytest.raises(ValueError, match="Missing required columns"):
+        # Test with None
+        with pytest.raises(ValueError, match="Invalid data type"):
             traffic_anomaly.changepoint(
                 data=None,
                 datetime_column='TimeStamp',
@@ -1545,9 +1505,9 @@ class TestTrafficAnomaly:
                 rolling_window_days="invalid"  # Should be int
             )
 
-    def test_memtable_exception_handling(self):
-        """Test exception handling in ibis.memtable() conversion"""
-        # Mock an object that will cause ibis.memtable() to raise an exception
+    def test_unreadable_data_handling(self):
+        """Test exception handling for data DuckDB cannot read"""
+        # Mock an object that DuckDB cannot register as a table
         class BadDataType:
             def __init__(self):
                 pass
@@ -1558,7 +1518,7 @@ class TestTrafficAnomaly:
         bad_data = BadDataType()
         
         # Test decompose with bad data type
-        with pytest.raises(ValueError, match="Invalid data type. Please provide a valid Ibis table or pandas DataFrame"):
+        with pytest.raises(ValueError, match="Invalid data type. Please provide a pandas DataFrame, a DuckDB relation or the name of a table or view"):
             traffic_anomaly.decompose(
                 data=bad_data,
                 datetime_column='timestamp',
@@ -1567,7 +1527,7 @@ class TestTrafficAnomaly:
             )
         
         # Test anomaly with bad data type
-        with pytest.raises(ValueError, match="Invalid data type. Please provide a valid Ibis table or pandas DataFrame"):
+        with pytest.raises(ValueError, match="Invalid data type. Please provide a pandas DataFrame, a DuckDB relation or the name of a table or view"):
             traffic_anomaly.anomaly(
                 decomposed_data=bad_data,
                 datetime_column='timestamp',
@@ -1576,7 +1536,7 @@ class TestTrafficAnomaly:
             )
         
         # Test changepoint with bad data type
-        with pytest.raises(ValueError, match="Invalid data type. Please provide a valid Ibis table or pandas DataFrame"):
+        with pytest.raises(ValueError, match="Invalid data type. Please provide a pandas DataFrame, a DuckDB relation or the name of a table or view"):
             traffic_anomaly.changepoint(
                 data=bad_data,
                 datetime_column='TimeStamp',
@@ -1595,16 +1555,20 @@ class TestTrafficAnomaly:
             'resid': [1.0, 1.0]
         })
         
+        conn = duckdb.connect()
+        conn.register('decomposed_data', decomposed_data)
         try:
             result = traffic_anomaly.anomaly(
-                decomposed_data=decomposed_data,
+                decomposed_data='decomposed_data',
                 datetime_column='timestamp',
                 value_column='travel_time',
                 entity_grouping_columns=['id'],
                 group_grouping_columns=None,  # Should be allowed
-                return_sql=True
+                return_sql=True,
+                conn=conn
             )
-            assert isinstance(result, (str, type(result))), "Should return SQL string with None group grouping"
+            assert isinstance(result, str), "Should return SQL string with None group grouping"
+            assert len(conn.sql(result).df()) == 2
         except Exception as e:
             pytest.fail(f"None group_grouping_columns should be allowed: {e}")
 

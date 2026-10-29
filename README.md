@@ -14,9 +14,9 @@
 [![Unit Tests](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml/badge.svg?branch=main)](https://github.com/ShawnStrasser/traffic-anomaly/actions/workflows/pr-tests.yml)
 [![codecov](https://codecov.io/gh/ShawnStrasser/traffic-anomaly/badge.svg)](https://codecov.io/gh/ShawnStrasser/traffic-anomaly)
 
-`traffic-anomaly` is a production-ready Python package for robust anomaly and changepoint detection across multi-entity time series. It uses Ibis to integrate with any SQL backend in the cloud or run locally with the included DuckDB backend.
+`traffic-anomaly` is a production-ready Python package for robust anomaly and changepoint detection across multi-entity time series. All of the work runs in [DuckDB](https://duckdb.org/): pass a pandas DataFrame, a DuckDB relation, or the name of a table in a DuckDB connection.
 
-**Tested on:** Windows, macOS, and Ubuntu with Python 3.9-3.13
+**Tested on:** Windows, macOS, and Ubuntu with Python 3.11-3.15 and DuckDB 2
 
 Designed for real-world traffic data (volumes, travel times), `traffic-anomaly` uses medians to decompose series into trend, daily, weekly, and residual components. Anomalies are then classified via Z-score or GEH statistics and change points highlight structural shifts. The package handles missing data and can drop time periods with insufficient observations. Sample data included, try it in Google Colab for detailed examples and explanations. [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1ktJfanOpRJ8jelc7w4nSDizj7SGwhScr?usp=sharing)
 
@@ -29,29 +29,18 @@ pip install traffic-anomaly
 ```
 
 <details>
-<summary><strong>Snowflake Compatibility</strong></summary>
+<summary><strong>Upgrading from 2.x</strong></summary>
 
-For enhanced Snowflake compatibility (including support for expressions in window functions, added to Snowflake in August 2024), follow these steps:
+Version 3.0 replaces Ibis with plain DuckDB. Results are unchanged, but the inputs and outputs that came from Ibis are gone:
 
-**Step 1:** Install traffic-anomaly normally
-```bash
-pip install traffic-anomaly
-```
+- **Ibis tables** are no longer accepted. Pass a DuckDB relation instead (you get a lazy relation back), or the name of a table or view together with `conn=` (the DuckDB connection holding it).
+- **`return_sql=True`** returns DuckDB SQL that reads your table by name, so `data` (and `connectivity_table`) must be table or view names. The SQL can be run in that connection or used in a `CREATE VIEW`/`CREATE TABLE ... AS`.
+- **`dialect`** is removed. The SQL is DuckDB SQL; other databases are no longer supported.
+- **`conn`** is new: the connection holding the table named by `data`. It defaults to DuckDB's default connection, the one `duckdb.sql()` uses.
+- A string passed as `data` is now read as a table name, and `None` is rejected as an invalid data type.
+- Requires Python 3.11 or newer and DuckDB 2.0 or newer. `ibis-framework` is no longer installed.
 
-**Step 2:** Reinstall ibis with Snowflake compatibility (without overwriting dependencies)
-```bash
-pip install --force-reinstall --no-deps "ibis-framework @ https://github.com/ShawnStrasser/ibis/archive/a1142d81965dc0f1650c2091de3e405d2dba6e5b.zip"
-```
-
-**Windows Users**: If Step 2 fails with path-related errors, enable long paths in Windows by running this command as Administrator in PowerShell, then restart your computer:
-
-```powershell
-New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
-```
-
-The Snowflake-compatible version uses a forked version of `ibis-framework` that supports expressions in window functions on Snowflake. This will be replaced with the official PyPI version once the upstream changes are merged.
-
-**Example Usage**: For a complete example of loading packages from Windows to Snowflake, see the [signal-analytics-snowflake](https://github.com/TPAU-ODOT/signal-analytics-snowflake) repository.
+pandas DataFrames in and out work exactly as before.
 
 </details>
 
@@ -65,7 +54,7 @@ from traffic_anomaly import sample_data
 travel_times = sample_data.travel_times
 
 decomp = decompose(
-    data=travel_times, # Pandas DataFrame or Ibis Table (for compatibility with any SQL backend)
+    data=travel_times, # Pandas DataFrame, DuckDB relation, or the name of a table in conn (see below)
     datetime_column='timestamp',
     value_column='travel_time',
     entity_grouping_columns=['id', 'group'],
@@ -75,7 +64,7 @@ decomp = decompose(
     min_rolling_window_samples=56, # Minimum number of samples in the rolling window, set to 0 to disable.
     min_time_of_day_samples=7, # Minimum number of samples for each time of day (like 2:00pm), set to 0 to disable
     drop_extras=False, # lets keep seasonal/trend for visualization below
-    return_sql=False # Return SQL queries instead of Pandas DataFrames for running on SQL backends
+    return_sql=False # Return the DuckDB SQL instead of the result (needs data given as a table name)
 )
 decomp.head(3)
 ```
@@ -93,6 +82,38 @@ The image below shows an example application on traffic counts (package does not
 
 ![ExampleAnomaly](anomaly1.png)
 
+## Working in DuckDB
+
+Every function takes its input in one of three forms and returns the same kind of thing:
+
+| Input | Returns |
+|-------|---------|
+| pandas DataFrame (or anything DuckDB can read, such as an Arrow table) | pandas DataFrame |
+| DuckDB relation | lazy DuckDB relation in the same connection |
+| name of a table or view, with `conn=` | lazy DuckDB relation in `conn`, or the SQL text with `return_sql=True` |
+
+Relations and table names keep the data in DuckDB, which can spill to disk, so large inputs never pass through pandas:
+
+```python
+import duckdb
+from traffic_anomaly import decompose, anomaly
+
+con = duckdb.connect()
+con.execute("CREATE TABLE counts AS SELECT * FROM 'counts.parquet'")
+
+# Lazy relations: nothing runs until the result is used
+decomp = decompose('counts', conn=con, datetime_column='timestamp', value_column='total',
+                   entity_grouping_columns=['detector'], rolling_window_enable=False)
+anomalies = anomaly(decomp, datetime_column='timestamp', value_column='total',
+                    entity_grouping_columns=['detector'], GEH=True, entity_threshold=6.0)
+anomalies.to_table('anomalies')  # or .df(), .to_parquet(...)
+
+# Or the SQL itself, which reads the table by name
+sql = decompose('counts', conn=con, datetime_column='timestamp', value_column='total',
+                entity_grouping_columns=['detector'], rolling_window_enable=False, return_sql=True)
+con.execute(f"CREATE VIEW decomposed AS {sql}")
+```
+
 ## Point Source (Originated) Anomaly Detection
 
 In road networks, an anomaly may be caused by downstream road segment/entity anomalies. To separate downstream-caused anomalies from locally-originated ones, pass a network connectivity table to `anomaly()` via `connectivity_table`. When provided, the output includes an additional boolean column `originated_anomaly` that indicates whether a detected anomaly is a point source (or originated) anomaly.
@@ -101,6 +122,7 @@ Requirements
 - Use exactly one entity grouping column for `anomaly()` (e.g., `entity_grouping_columns=['id']`).
 - The connectivity table must contain the entity column and a downstream reference named `next_<entity>` (for `id`, this must be `next_id`).
 - The connectivity table maps each entity to its downstream neighbor(s). In other words, it lists all the roads that vehicles may turn onto from a given road segment.
+- Pass it the same way as the decomposed data: a DataFrame, a DuckDB relation (or a DataFrame) alongside a relation, or a table name alongside a table name.
 
 Example
 ```python
@@ -134,7 +156,7 @@ changepoint_data = sample_data.changepoints_input
 
 # Apply change point detection
 changepoints = changepoint(
-    data=changepoint_data,  # Pandas DataFrame or Ibis Table
+    data=changepoint_data,  # Pandas DataFrame, DuckDB relation, or table name
     value_column='travel_time_seconds',
     entity_grouping_column='ID',
     datetime_column='TimeStamp',
