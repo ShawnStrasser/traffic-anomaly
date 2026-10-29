@@ -2,7 +2,7 @@
 
 ## 3.0.0 (October 29, 2026)
 
-Ibis is gone: `decompose`, `anomaly` and `changepoint` are now written in plain DuckDB SQL. Results are identical to 2.5.4, checked value for value (including column types) on the bundled sample data and on 35 days of real 15-minute detector counts, under both DuckDB 1.5 and 2.0.
+Ibis is gone: `decompose`, `anomaly` and `changepoint` are now written in plain DuckDB SQL. Results are identical to 2.5.4, checked value for value (including column types) on the bundled sample data, on 35 days of real 15-minute detector counts, and on synthetic series with every timestamp unit and time zones, under both DuckDB 1.5 and 2.0.
 
 ### Breaking changes
 
@@ -27,6 +27,8 @@ pandas-only code needs no changes.
 
 ### Other changes
 
+- DataFrames keep the 2.x timestamp handling: timestamps are read in microseconds (so results come back as `datetime64[us]` whatever the input unit), times of day are worked out in UTC, and time zone aware columns come back in their own zone. Tables and relations use DuckDB's own types and the connection's `TimeZone` setting.
+- A `DATE` column works as the datetime column (2.x raised an error).
 - Intermediate columns use internal names, so input columns that happen to be called `detrend`, `time_of_day` and so on pass through instead of being overwritten.
 - `changepoint` output is sorted by entity and time in all cases (it was unsorted when `recent_days_for_validation` was set).
 - Tested on Python 3.11 to 3.15.

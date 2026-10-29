@@ -53,6 +53,9 @@ class Source:
     relation, or the name of a table or view in conn (DuckDB's default connection if conn is None).
     A DataFrame is read in a private connection and comes back as a DataFrame. A relation or table name
     comes back as a lazy DuckDB relation, or with return_sql=True (table names only) as the SQL text.
+
+    DataFrames are handled as 2.x handled them through Ibis: timestamps are read in microseconds, time zones
+    are worked in UTC, and time zone aware columns come back in the time zone they went in with.
     """
 
     def __init__(self, data, conn, return_sql, datetime_column, value_column, grouping_columns):
@@ -60,6 +63,7 @@ class Source:
         self.return_sql = return_sql
         self.connectivity = None
         self._con = None
+        self._time_zones = {}
         if isinstance(data, str):
             self.conn = duckdb.default_connection() if conn is None else conn
             self.table = data
@@ -72,15 +76,17 @@ class Source:
         else:
             self.table = INPUT
             self._con = duckdb.connect()
+            self._con.execute("SET TimeZone = 'UTC'")
             try:
-                self._con.register(INPUT, data)
+                schema = _register_frame(self._con, INPUT, data)
             except Exception:
                 self._con.close()
                 if hasattr(data, 'columns') and len(data.columns) == 0:
                     _validate([], {}, datetime_column, value_column, grouping_columns)
                 raise ValueError('Invalid data type. Please provide a pandas DataFrame, a DuckDB relation '
                                  'or the name of a table or view.') from None
-            schema = self._con.table(INPUT)
+            self._time_zones = {name: dtype.tz for name, dtype in getattr(data, 'dtypes', {}).items()
+                                if getattr(dtype, 'tz', None) is not None}
         self.columns = list(schema.columns)
         self.types = {name: str(dtype) for name, dtype in zip(schema.columns, schema.types)}
         _validate(self.columns, self.types, datetime_column, value_column, grouping_columns)
@@ -94,10 +100,9 @@ class Source:
             return table, list(_describe(self.conn, table).columns)
         if self._con is not None:
             try:
-                self._con.register(CONNECTIVITY, table)
+                return CONNECTIVITY, list(_register_frame(self._con, CONNECTIVITY, table).columns)
             except Exception:
                 raise ValueError('Invalid connectivity_table type. Please provide a pandas DataFrame.') from None
-            return CONNECTIVITY, list(self._con.table(CONNECTIVITY).columns)
         self.connectivity = table
         if isinstance(table, duckdb.DuckDBPyRelation):
             return CONNECTIVITY, list(table.columns)
@@ -118,9 +123,24 @@ class Source:
         if self._con is None:
             return _query_relation(self.data, self.table, sql, self.connectivity)
         try:
-            return self._con.sql(sql).df()
+            df = self._con.sql(sql).df()
         finally:
             self._con.close()
+        for name, tz in self._time_zones.items():
+            if name in df.columns and getattr(df[name].dtype, 'tz', None) is not None:
+                df[name] = df[name].dt.tz_convert(tz)
+        return df
+
+
+def _register_frame(con, name, frame):
+    """Expose a DataFrame to con as a view called name, with its timestamps in microseconds."""
+    con.register(f'{name}_frame', frame)
+    relation = con.table(f'{name}_frame')
+    casts = [f'CAST({quote(col)} AS TIMESTAMP) AS {quote(col)}' for col, dtype in zip(relation.columns, relation.types)
+             if str(dtype) in ('TIMESTAMP_NS', 'TIMESTAMP_MS', 'TIMESTAMP_S')]
+    replace = f" REPLACE ({', '.join(casts)})" if casts else ''
+    con.execute(f'CREATE VIEW {name} AS SELECT *{replace} FROM {name}_frame')
+    return con.table(name)
 
 
 def _describe(conn, table):

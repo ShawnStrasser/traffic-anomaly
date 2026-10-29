@@ -708,6 +708,24 @@ class TestTrafficAnomaly:
                                     **self._ANOMALY)
         conn.close()
 
+    def test_dataframe_timestamps(self):
+        """DataFrame timestamps come back in microseconds, and time zone aware ones in their own zone"""
+        times = pd.date_range('2024-01-01', periods=14 * 24, freq='h')
+        frame = pd.DataFrame({'TimeStamp': times, 'id': 1, 'value': np.arange(len(times)) % 24 + 1.0})
+        params = dict(datetime_column='TimeStamp', value_column='value', entity_grouping_columns=['id'],
+                      freq_minutes=60, rolling_window_enable=False)
+        expected = traffic_anomaly.decompose(frame, **params)
+        assert expected['TimeStamp'].dtype == 'datetime64[us]'
+        for unit in ['ns', 'ms', 's']:
+            result = traffic_anomaly.decompose(frame.astype({'TimeStamp': f'datetime64[{unit}]'}), **params)
+            self._assert_same(result, expected)
+
+        # Times of day are worked out in UTC, so the same instants in another zone decompose the same way
+        local = frame.assign(TimeStamp=times.tz_localize('UTC').tz_convert('America/Los_Angeles'))
+        result = traffic_anomaly.decompose(local, **params)
+        assert str(result['TimeStamp'].dt.tz) == 'America/Los_Angeles'
+        self._assert_same(result.assign(TimeStamp=result['TimeStamp'].dt.tz_convert(None)), expected)
+
     def test_no_ibis(self):
         """The package runs on DuckDB alone"""
         assert 'ibis' not in sys.modules
