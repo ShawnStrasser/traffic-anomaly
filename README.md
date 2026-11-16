@@ -31,14 +31,14 @@ pip install traffic-anomaly
 <details>
 <summary><strong>Upgrading from 2.x</strong></summary>
 
-Version 3.0 replaces Ibis with plain DuckDB. Results are unchanged, but the inputs and outputs that came from Ibis are gone:
+Version 3.0 runs everything in DuckDB. Results are unchanged, but some inputs and outputs are different:
 
-- **Ibis tables** are no longer accepted. Pass a DuckDB relation instead (you get a lazy relation back), or the name of a table or view together with `conn=` (the DuckDB connection holding it).
+- **Inputs** are a pandas DataFrame, a DuckDB relation (you get a lazy relation back), or the name of a table or view together with `conn=` (the DuckDB connection holding it). Other table types are no longer accepted.
 - **`return_sql=True`** returns DuckDB SQL that reads your table by name, so `data` (and `connectivity_table`) must be table or view names. The SQL can be run in that connection or used in a `CREATE VIEW`/`CREATE TABLE ... AS`.
 - **`dialect`** is removed. The SQL is DuckDB SQL; other databases are no longer supported.
 - **`conn`** is new: the connection holding the table named by `data`. It defaults to DuckDB's default connection, the one `duckdb.sql()` uses.
 - A string passed as `data` is now read as a table name, and `None` is rejected as an invalid data type.
-- Requires Python 3.11 or newer and DuckDB 2.0 or newer. `ibis-framework` is no longer installed.
+- Requires Python 3.11 or newer and DuckDB 2.0 or newer. The only dependencies are `duckdb` and `pandas`.
 
 pandas DataFrames in and out work exactly as before.
 

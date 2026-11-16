@@ -54,7 +54,7 @@ class Source:
     A DataFrame is read in a private connection and comes back as a DataFrame. A relation or table name
     comes back as a lazy DuckDB relation, or with return_sql=True (table names only) as the SQL text.
 
-    DataFrames are handled as 2.x handled them through Ibis: timestamps are read in microseconds, time zones
+    DataFrames are handled as in 2.x: timestamps are read in microseconds, time zones
     are worked in UTC, and time zone aware columns come back in the time zone they went in with.
     """
 
